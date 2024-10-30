@@ -1,9 +1,9 @@
 from rdkit.Chem import AllChem, Mol
 from common import protonate_at_site, deprotonate_at_site
 
-import warnings
 import copy
 import itertools
+import warnings
 
 class Protomer:
     # This module should be compatible with any charge object.
@@ -41,7 +41,6 @@ class ProtomerCollection:
 
         self.acidic_sites = []
         self.basic_sites = []
-        #TODO: check if generated protomers are isomorphic.
 
     def extract_matches_from_smarts_collection(self, mol: Mol, groups: list[Mol], sites: list[int]) -> list[int]:
         """
@@ -92,7 +91,7 @@ class ProtomerCollection:
             basic_sites: list of basic centers for mol
         """
         acid_base_pairs = [r for r in itertools.product(acidic_sites, basic_sites)]
-        for idx, acid_base_pair in enumerate(acid_base_pairs):
+        for acid_base_pair in acid_base_pairs:
             mol = copy.deepcopy(self.ref_protomer.mol)
 
             acidic_idx = acid_base_pair[0]
@@ -100,7 +99,7 @@ class ProtomerCollection:
             protonate_at_site(mol, basic_idx)
             deprotonate_at_site(mol, acidic_idx)
             new_protomer = Protomer.from_mol(mol)
-            self.add_protomer(new_protomer, idx)
+            self.add_protomer(new_protomer)
 
 
     def generate_uncharged_protomer(self, protomer: Protomer) -> Protomer:
@@ -112,15 +111,27 @@ class ProtomerCollection:
         # TODO: assert number of N[H1,H2,H3]+ groups MINUS the  number of [X-] groups is equal to the overall charge.
         return protomer
 
-    def add_protomer(self, protomer: Protomer, idx : int = 0):
+    def add_protomer(self, protomer: Protomer):
         """
         Adds a protomer to the ProtomerCollection.
         Args:
             protomer: The protomer to add
             idx: the id of the protomer to label.
         """
-        assert idx not in self.protomers.keys()
-        self.protomers[idx] = protomer
+        #TODO: check if generated protomers are isomorphic compared to existing protomers!
+
+        if len(self.protomers) == 0:
+            idx = 0
+        else:
+            idx = list(self.protomers.keys())[-1] + 1
+
+        # Check for isomorphic
+        existing_smiles = [AllChem.CanonSmiles(p.smiles) for p in self.protomers.values()]
+        if any([AllChem.CanonSmiles(protomer.smiles) == x for x in existing_smiles]):
+            warnings.warn(f"Protomer {protomer.smiles} not added due to degeneracy.")
+            # TODO: include degeneracy for this species. May need to rewrite code, maybe 2 dicts?
+        else:
+            self.protomers[idx] = protomer
 
     def search_for_protomers(self):
         """
