@@ -1,13 +1,12 @@
 from rdkit.Chem import AllChem, Mol
 import warnings
 
-
 class Protomer:
     # This module should be compatible with any charge object.
     def __init__(self, smiles: str):
         self.smiles = smiles
         mol = AllChem.MolFromSmiles(smiles)
-        [atom.SetAtomMapNum(atom.GetIdx()+1) for atom in mol.GetAtoms()]
+#        [atom.SetAtomMapNum(atom.GetIdx()+1) for atom in mol.GetAtoms()]
         self.mol = mol
     
 class ProtomerCollection:
@@ -30,18 +29,6 @@ class ProtomerCollection:
 
 #        self.basic_sites = self.find_basic_sites(ref_protomer)
 #        self.acidic_sites = self.find_acidic_sites(ref_protomer)
-        self.SMARTS_DICT = {"strong_basic": 
-                    {"groups": ["[#7:0]!-[#1:1]"], "sites": [0]},
-                "weak_basic":  # TODO: =O (etc) groups? can be C=O, P=O etc.
-                    {"groups": [], "sites": []}, 
-                "strong_acidic": # non-CH acids
-                    {"groups": ["[!#6:0]-[#1:1]"], "sites": [0]},
-                "weak_acidic": # TODO: safe to assume CH acids, are weak. C=CCC=C (aromatic or non),C(=O)CC(=O), N#[CH], N2O-CHn. See IUPAC dataset for examples.
-                    {"groups": [], "sites": []} 
-                }
-        for acidity_type, values in self.SMARTS_DICT.items():
-            self.SMARTS_DICT[acidity_type]["cached_mols"] = [AllChem.MolFromSmarts(x) for x in values['groups']]
-
 
     def extract_matches_from_smarts_collection(self, ref_mol: Mol, groups: list, sites: list):
         """
@@ -50,26 +37,25 @@ class ProtomerCollection:
         """
         matching_sites = []
 
-        for idx, smarts_pattern in enumerate(groups):
-            matches = ref_mol.GetSubstructMatch(smarts_pattern)
+        for idx, substruct in enumerate(groups):
+            matches = ref_mol.GetSubstructMatch(substruct)
+            if len(matches) == 1:
+                matches = [matches]
             for match in matches:
                 site = sites[idx]
                 atom_match = match[site]
-                matching_sites.append(atom_match)
+            matching_sites.append(atom_match)
 
         return matching_sites
 
-    def find_ionization_sites(self, search_type: str):
-        if search_type not in self.SMARTS_DICT.keys():
-            raise ValueError(f"Search type must be in: {self.SMARTS_DICT.keys()}")
+    def find_ionization_sites(self, query_substructs: list, query_sites: list):
 
         sites = []
         ref_mol = self.ref_protomer.mol
 
-        smarts_collection = self.SMARTS_DICT[search_type]
         sites = self.extract_matches_from_smarts_collection(ref_mol, 
-                                                            smarts_collection["cached_mols"],
-                                                            smarts_collection["sites"],
+                                                            query_substructs,
+                                                            query_sites,
         )
 
         if len(self.forbidden_atoms) > 0:        
