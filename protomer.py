@@ -1,13 +1,27 @@
 from rdkit.Chem import AllChem, Mol
+from common import protonate_at_site, deprotonate_at_site
+
 import warnings
+import copy
+import itertools
 
 class Protomer:
     # This module should be compatible with any charge object.
-    def __init__(self, smiles: str):
+    def __init__(self, smiles: str = "", mol: Mol = None):
         self.smiles = smiles
-        mol = AllChem.MolFromSmiles(smiles)
-#        [atom.SetAtomMapNum(atom.GetIdx()+1) for atom in mol.GetAtoms()]
         self.mol = mol
+
+    def __repr__(self):
+        return f"Protomer {self.smiles}"
+
+    @classmethod
+    def from_smiles(cls, smiles):
+        return cls(smiles, AllChem.MolFromSmiles(smiles))
+
+    @classmethod
+    def from_mol(cls, mol):
+        return cls(AllChem.MolToSmiles(mol), mol )
+    
     
 class ProtomerCollection:
     def __init__(self, ref_protomer : Protomer):
@@ -23,35 +37,40 @@ class ProtomerCollection:
             self.ref_protomer = self.generate_uncharged_protomer(ref_protomer)
         else:
             self.ref_protomer = ref_protomer
-            # TODO: get the protonated and deprotonated groups and EXCLUDE those
-            self.forbidden_atoms = [] # TODO 
-            
+            self.forbidden_atoms = [None] # TODO: get the protonated and deprotonated groups and EXCLUDE those
 
-#        self.basic_sites = self.find_basic_sites(ref_protomer)
-#        self.acidic_sites = self.find_acidic_sites(ref_protomer)
+        self.acidic_sites = []
+        self.basic_sites = []
+        #TODO: check if generated protomers are isomorphic.
 
-    def extract_matches_from_smarts_collection(self, ref_mol: Mol, groups: list, sites: list):
+    def extract_matches_from_smarts_collection(self, mol: Mol, groups: list[Mol], sites: list[int]) -> list[int]:
         """
-        Given a reference mol and a list of groups and group of acidity centers corresponding to those groups,
+        Given any mol and a list of groups and group of acidity centers corresponding to those groups,
         returns the matching atom indices matching those substructures.
+        Args:
+            mol:  mol object to find the matching indices
+            groups: list of substructures (mol)
+            sites: list of acidity center indices (of the substructures) where the H atom is attached to
+        Returns:
+            matching_sites: list of atom indices that match the acidic or basic site
         """
         matching_sites = []
 
         for idx, substruct in enumerate(groups):
-            matches = ref_mol.GetSubstructMatch(substruct)
-            if len(matches) == 1:
-                matches = [matches]
+            matches = mol.GetSubstructMatches(substruct)
             for match in matches:
                 site = sites[idx]
                 atom_match = match[site]
-            matching_sites.append(atom_match)
+                matching_sites.append(atom_match)
 
         return matching_sites
 
-    def find_ionization_sites(self, query_substructs: list, query_sites: list):
-
+    def find_ionization_sites(self, query_substructs: list[Mol], query_sites: list[int]) -> list[int]:
+        """
+        Takes the ref mol and tries to find the acidic or basic sites on it matching query. 
+        """
         sites = []
-        ref_mol = self.ref_protomer.mol
+        ref_mol = copy.deepcopy(self.ref_protomer.mol)
 
         sites = self.extract_matches_from_smarts_collection(ref_mol, 
                                                             query_substructs,
@@ -62,32 +81,51 @@ class ProtomerCollection:
             sites = [x for x in sites if x not in self.forbidden_atoms]
         
         return sites
+    
+    def generate_protomers_from_ref(self, acidic_sites: list[int], basic_sites: list[int]):
+        """
+        Takes the ref protomer and enumerates other protomers given possible given the acid/base sites.
+        Most often used in combination with find_ionization_sites.
+
+        Args:
+            acid_sites: list of acidity centers for mol
+            basic_sites: list of basic centers for mol
+        """
+        acid_base_pairs = [r for r in itertools.product(acidic_sites, basic_sites)]
+        for idx, acid_base_pair in enumerate(acid_base_pairs):
+            mol = copy.deepcopy(self.ref_protomer.mol)
+
+            acidic_idx = acid_base_pair[0]
+            basic_idx = acid_base_pair[1]
+            protonate_at_site(mol, basic_idx)
+            deprotonate_at_site(mol, acidic_idx)
+            new_protomer = Protomer.from_mol(mol)
+            self.add_protomer(new_protomer, idx)
+
 
     def generate_uncharged_protomer(self, protomer: Protomer) -> Protomer:
         """
         Given a protomer, finds the uncharged variant as a mol object.
-        TODO: get this to work for non-zero charge
+        TODO: get this to work for non-zero charge. TODO is to do this at all.
         """
         
         # TODO: assert number of N[H1,H2,H3]+ groups MINUS the  number of [X-] groups is equal to the overall charge.
-        # If they aren't equal, raise an error.
-        return protomer   # TODO
+        return protomer
 
-    def add_protomer(self, protomer: Protomer):
-        # TODO: link protomer to specific ID. Add to self.protomers. 
-        # Make self-consistent with uncharged protomer
-        pass
+    def add_protomer(self, protomer: Protomer, idx : int = 0):
+        """
+        Adds a protomer to the ProtomerCollection.
+        Args:
+            protomer: The protomer to add
+            idx: the id of the protomer to label.
+        """
+        assert idx not in self.protomers.keys()
+        self.protomers[idx] = protomer
 
     def search_for_protomers(self):
         """
         Using the base protomer, search and enumerate a list of protomers.
         """
-        pass
         # TODO: return not only the protomers, but the acid sites that were modified.
         # Either here or separately, pass a new unique ID for this as well.
-
-
-def protomer_collection_from_smiles(smiles: str):
-    # helper function for generating protomer collection from SMILES
-    protomer = Protomer(smiles = smiles)
-    return ProtomerCollection(ref_protomer = protomer)
+        pass
