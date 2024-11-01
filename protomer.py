@@ -8,23 +8,23 @@ import warnings
 class Protomer:
     # This module should be compatible with any charge object.
     def __init__(self, smiles: str = "", mol: Mol = None):
-        self.smiles = smiles
+        self.smiles = AllChem.CanonSmiles(smiles)
         self.mol = mol
 
     def __repr__(self):
         return f"Protomer {self.smiles}"
 
     @classmethod
-    def from_smiles(cls, smiles):
+    def from_smiles(cls, smiles: str):
         return cls(smiles, AllChem.MolFromSmiles(smiles))
 
     @classmethod
-    def from_mol(cls, mol):
+    def from_mol(cls, mol: Mol):
         return cls(AllChem.MolToSmiles(mol), mol )
     
     
-class ProtomerCollection:
-    def __init__(self, ref_protomer : Protomer):
+class Tautomer:
+    def __init__(self, ref_protomer : Protomer = None):
         """
         Species should be of the neutral uncharged form OR a zwitterionic form. 
         Should keep the uncharged form in a separate collection to the zwitterionic forms. 
@@ -33,14 +33,27 @@ class ProtomerCollection:
         self.protomers = {}
         self.forbidden_atoms = []
 
+        self.ref_protomer = ref_protomer
+        # TODO: get the protonated and deprotonated groups and EXCLUDE those (self.forbidden_atoms)
+
         if AllChem.GetFormalCharge(ref_protomer.mol) == 0:
             self.ref_protomer = self.generate_uncharged_protomer(ref_protomer)
-        else:
-            self.ref_protomer = ref_protomer
-            self.forbidden_atoms = [None] # TODO: get the protonated and deprotonated groups and EXCLUDE those
 
         self.acidic_sites = []
         self.basic_sites = []
+
+    def __repr__(self):
+        if len(self.protomers) > 0:
+            return f"Tautomer with {self.ref_protomer} | {self.protomers}"
+        return f"Tautomer with {self.ref_protomer}"
+
+    @classmethod
+    def from_smiles(cls, smiles: str):
+        return cls(Protomer.from_smiles(smiles))
+
+    @classmethod
+    def from_mol(cls, mol: Mol):
+        return cls(Protomer.from_mol(mol))
 
     def extract_matches_from_smarts_collection(self, mol: Mol, groups: list[Mol], sites: list[int]) -> list[int]:
         """
@@ -113,7 +126,7 @@ class ProtomerCollection:
 
     def add_protomer(self, protomer: Protomer):
         """
-        Adds a protomer to the ProtomerCollection.
+        Adds a protomer to the Tautomer.
         Args:
             protomer: The protomer to add
             idx: the id of the protomer to label.
@@ -140,3 +153,33 @@ class ProtomerCollection:
         # TODO: return not only the protomers, but the acid sites that were modified.
         # Either here or separately, pass a new unique ID for this as well.
         pass
+
+class Species:
+    """
+    Contains enumerations of tautomers for a given compound.
+    """
+    def __init__(self, ref_tautomer : Tautomer = None):
+        self.ref_tautomer = ref_tautomer
+        self.tautomers = []
+
+    def __repr__(self):
+        if len(self.tautomers) > 0:
+            return f"Species with {self.ref_tautomer} | {self.tautomers}"
+        return f"Species with {self.ref_tautomer}"
+
+    @classmethod
+    def from_smiles(cls, smiles: str):
+        return cls(Tautomer.from_smiles(smiles))
+
+    @classmethod
+    def from_mol(cls, mol: Mol):
+        return cls(Tautomer.from_mol(mol))
+
+    def add_tautomer(self, taut: Tautomer):
+        self.tautomers.append(taut)
+    
+    def add_tautomers_from_list_of_smiles(self, tautomer_smiles: list[str]):
+        for smiles in tautomer_smiles:
+            tautomer = Tautomer.from_smiles(smiles)        
+            self.tautomers.append(tautomer)
+        
