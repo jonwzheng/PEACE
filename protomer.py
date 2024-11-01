@@ -168,11 +168,21 @@ class Species:
         idx = list(self.tautomers.keys())[-1] + 1
         self.tautomers[idx] = taut        
     
+    def get_all_smiles(self):
+        smiles = []
+        for tautomer in self.tautomers.values():
+            for protomer in tautomer.protomers.values():
+                smiles.append(protomer.smiles)
+        return list(set(smiles))
+
     def embed_tautomers_from_list_of_smiles(self, tautomer_smiles: list[str]):
         """ Embed tautomers from a list of SMILES strings."""
         for smiles in tautomer_smiles:
-            tautomer = Tautomer.from_smiles(smiles)        
-            self.embed_tautomer(tautomer)
+            if smiles not in self.get_all_smiles():
+                tautomer = Tautomer.from_smiles(smiles)
+                self.embed_tautomer(tautomer)
+            else:
+                warnings.warn(f"Tautomer with SMILES {smiles} not added as already embedded in species.")
         
     def to_dataframe(self):
         spec_ids = []
@@ -196,6 +206,6 @@ class Species:
     
     def generate_protomer_plot(self, n_columns: int = 5):
         imgs = []
-        for prot_id, tautomer in self.tautomers.items():
+        for tautomer in self.tautomers.values():
             imgs.append(tautomer.generate_protomer_plot(n_columns))
         return imgs
