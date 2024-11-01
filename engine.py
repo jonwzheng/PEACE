@@ -11,11 +11,11 @@ class ChargeEngine:
         self.tautomer_enumerator = TautomerEnumerator()
         self.SMARTS_DICT = {
                 "strong_basic": 
-                    {"groups": ["[#7]"], "sites": [0]}, # TODO: exclude NH acids
+                    {"groups": ["[#7]", "[#6-]"], "sites": [0, 1]}, # TODO: exclude NH acids.
                 "weak_basic":  # TODO: =O (etc) groups? can be C=O, P=O etc.
                     {"groups": [], "sites": []}, 
-                "strong_acidic": # non-CH acids
-                    {"groups": ["[!#6&!#7;!H0]"], "sites": [0]},
+                "strong_acidic": # non-CH acids, NHx+
+                    {"groups": ["[!#6&!#7;!H0]","[#7+;!H0]"], "sites": [0, 0]},
                 "weak_acidic": # TODO: CH/NH acids. C=CCC=C (aromatic or non),C(=O)CC(=O), N#[CH], N2O-CHn. See IUPAC dataset for examples.
                     {"groups": [], "sites": []} 
                 }
@@ -23,7 +23,8 @@ class ChargeEngine:
         for acidity_type, values in self.SMARTS_DICT.items():
             self.SMARTS_DICT[acidity_type]["cached_mols"] = [AllChem.MolFromSmarts(x) for x in values['groups']]
 
-    def search_acidity_centers(self, taut: Tautomer, search_type: str):
+    def search_ionization_centers(self, taut: Tautomer, search_type: str) -> list[int]:
+        """ Given a Tautomer, returns a list of atom indices corresponding to the query acidity/basicity"""
         if search_type not in self.SMARTS_DICT.keys():
             raise ValueError(f"Search type must be in: {self.SMARTS_DICT.keys()}")
         
@@ -34,5 +35,5 @@ class ChargeEngine:
         """
         Search a species for tautomers, given a reference tautomer (which has a reference protomer).
         """
-        result = self.tautomer_enumerator.Enumerate(mol = spec.ref_tautomer.ref_protomer.mol)
+        result = self.tautomer_enumerator.Enumerate(mol = spec.tautomers[0].protomers[0].mol)
         return [AllChem.MolToSmiles(x) for x in result]
