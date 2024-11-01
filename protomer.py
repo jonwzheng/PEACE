@@ -135,11 +135,13 @@ class Tautomer:
 
         highlights = [protomer.ionization_sites for protomer in self.protomers.values()]
         highlights.extend([[] for _ in range(n_padding)])
-        highlights = np.array(highlights, dtype=object)
+        highlights_array = np.array(highlights, dtype=object)
 
         mols = np.reshape(mols, (n_rows, n_columns))
         legends = np.reshape(legends, (n_rows, n_columns))
-        highlights = np.reshape(highlights, (n_rows, n_columns))
+        if highlights_array.size is not 0:
+            highlights = highlights_array.reshape(n_rows, n_columns)
+        
         img = Draw.MolsMatrixToGridImage(molsMatrix=mols.tolist(), legendsMatrix=legends.tolist(),
                                          subImgSize=(300, 200), highlightAtomListsMatrix=highlights.tolist())
         return img 

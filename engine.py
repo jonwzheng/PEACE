@@ -36,11 +36,4 @@ class ChargeEngine:
         Search a species for tautomers, given a reference tautomer (which has a reference protomer).
         """
         result = self.tautomer_enumerator.Enumerate(mol = spec.tautomers[0].protomers[0].mol)
-        #return [AllChem.MolToSmiles(x) for x in result]
-        out_smiles = []
-        for mol in result:
-            smiles = AllChem.MolToSmiles(mol)
-            if smiles not in out_smiles and smiles != spec.tautomers[0].protomers[0].smiles:
-                out_smiles.append(smiles)
-
-        return out_smiles
+        return [AllChem.MolToSmiles(x) for x in result]

@@ -6,7 +6,8 @@ from rdkit.Chem import Draw
 ### TODO: graphic art should be a PEACE sign with a tetrahedral carbon svg
 
 if __name__ == "__main__":
-    spec = Species.from_smiles("NCC(=O)CCCC(O)CC(O)CC(N)(N)CN")
+#    spec = Species.from_smiles("NCC(=O)CCCC(O)CC(O)CC(N)(N)CN")
+    spec = Species.from_smiles("Oc1cc(N)ccc1")
     engine = ChargeEngine()
     
     list_of_tautomers = engine.search_for_tautomers(spec)
