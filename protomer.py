@@ -139,11 +139,13 @@ class Tautomer:
 
         mols = np.reshape(mols, (n_rows, n_columns))
         legends = np.reshape(legends, (n_rows, n_columns))
-        if highlights_array.size is not 0:
-            highlights = highlights_array.reshape(n_rows, n_columns)
-        
-        img = Draw.MolsMatrixToGridImage(molsMatrix=mols.tolist(), legendsMatrix=legends.tolist(),
-                                         subImgSize=(300, 200), highlightAtomListsMatrix=highlights.tolist())
+        if highlights_array.size != 0:
+            highlights = highlights_array.reshape(n_rows, n_columns).tolist()            
+            img = Draw.MolsMatrixToGridImage(molsMatrix=mols.tolist(), legendsMatrix=legends.tolist(),
+                                            subImgSize=(300, 200), highlightAtomListsMatrix=highlights)
+        else:
+            img = Draw.MolsMatrixToGridImage(molsMatrix=mols.tolist(), legendsMatrix=legends.tolist(),
+                                            subImgSize=(300, 200))
         return img 
 
 class Species:
