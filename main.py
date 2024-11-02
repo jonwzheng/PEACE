@@ -8,6 +8,7 @@ from rdkit.Chem import Draw
 if __name__ == "__main__":
 #    spec = Species.from_smiles("NCC(=O)CCCC(O)CC(O)CC(N)(N)CN")
     spec = Species.from_smiles("Oc1cc(N)ccc1")
+#    spec = Species.from_smiles("NCC(=O)O")
     engine = ChargeEngine()
     
     list_of_tautomers = engine.search_for_tautomers(spec)
