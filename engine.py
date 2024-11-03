@@ -35,11 +35,23 @@ class ChargeEngine:
         """
         Search a species for tautomers, given a reference tautomer (which has a reference protomer).
         """
-        # TODO: exclude carboxylic acid groups and esters
-        # see https://github.com/rdkit/rdkit/discussions/6822
-        result = self.tautomer_enumerator.Enumerate(mol = spec.tautomers[0].protomers[0].mol)
-        
-        # TODO: analyze if changed atoms from Result correspond to carboxylic acid or ester group
-        # can search for atom indices where we have a match for these
+        ref_mol = spec.tautomers[0].protomers[0].mol
+        results = self.tautomer_enumerator.Enumerate(mol = ref_mol)
 
-        return [AllChem.MolToSmiles(x) for x in result]
+        screened_smiles = []
+
+        # Find atoms that correspond to forbidden groups
+        # TODO: move this code to engine
+        for smarts in ["[CX3](=[OX1])O "]:
+            smarts_substructure = pass
+
+        for smiles in results.smiles:
+            screened_smiles.append(smiles)
+
+        # TODO: exclude carboxylic acid groups and esters and ?
+        # see https://github.com/rdkit/rdkit/discussions/6822
+        # can analyze if changed atoms from Result correspond to carboxylic acid or ester group
+        # can search for atom indices where we have a match for these
+        # Exclude also if it falls into an [aromatic - aromatic(OH/NH) - aromatic]
+
+        return screened_smiles
