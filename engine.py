@@ -1,6 +1,8 @@
 from protomer import Tautomer, Species
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, Mol, Atom
 from rdkit.Chem.MolStandardize.rdMolStandardize import TautomerEnumerator
+
+import warnings
 
 class ChargeEngine:
     """
@@ -31,27 +33,52 @@ class ChargeEngine:
         smarts_collection = self.SMARTS_DICT[search_type]
         return taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
 
-    def search_for_tautomers(self, spec: Species):
+    def search_for_tautomers(self, spec: Species) -> list[str]:
         """
         Search a species for tautomers, given a reference tautomer (which has a reference protomer).
         """
         ref_mol = spec.tautomers[0].protomers[0].mol
         results = self.tautomer_enumerator.Enumerate(mol = ref_mol)
 
-        screened_smiles = []
-
         # Find atoms that correspond to forbidden groups
         # TODO: move this code to engine
-        for smarts in ["[CX3](=[OX1])O "]:
-            smarts_substructure = pass
-
-        for smiles in results.smiles:
-            screened_smiles.append(smiles)
-
-        # TODO: exclude carboxylic acid groups and esters and ?
         # see https://github.com/rdkit/rdkit/discussions/6822
-        # can analyze if changed atoms from Result correspond to carboxylic acid or ester group
-        # can search for atom indices where we have a match for these
         # Exclude also if it falls into an [aromatic - aromatic(OH/NH) - aromatic]
 
-        return screened_smiles
+        atom_ids = []
+        for smarts in ["[CX3](=[OX1])O "]:
+            smarts_substructure = AllChem.MolFromSmarts(smarts)
+            matches = ref_mol.GetSubstructMatches(smarts_substructure)
+            for match in matches:
+                atom_ids.extend(match[0:2]) # only take the C, =O groups
+
+        atom_ids = list(set(atom_ids))
+        candidate_smiles = [spec.tautomers[0].protomers[0].smiles]
+
+        def check_atom_for_equivalence(atom_1: Atom, atom_2: Atom) -> bool:
+            for m in ['GetFormalCharge', 'GetNumImplicitHs', 'GetAtomicNum', 'GetDegree','GetHybridization',
+                      'GetExplicitValence']:
+                if getattr(atom_1, m)() != getattr(atom_2, m)():
+                    return False
+            for idx, bond_1 in enumerate(atom_1.GetBonds()):
+                bond_2 = atom_2.GetBonds()[idx]
+                for n in ['GetBondType']:
+                    if getattr(bond_1, n)() != getattr(bond_2, n)():
+                        return False
+            return True
+
+
+        ref_mol_atoms = ref_mol.GetAtoms()
+        for smiles in results.smiles:
+            tautomerized_atoms = []
+            analyte_mol = AllChem.MolFromSmiles(smiles)
+            for atom in analyte_mol.GetAtoms():
+                idx = atom.GetIdx()
+                if check_atom_for_equivalence(atom, ref_mol_atoms[idx]) == False:
+                    tautomerized_atoms.append(idx)
+
+            if not all([x in tautomerized_atoms for x in atom_ids]) or len(atom_ids) == 0:
+                candidate_smiles.append(smiles)
+                
+
+        return candidate_smiles
