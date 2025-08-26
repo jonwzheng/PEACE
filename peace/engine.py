@@ -13,11 +13,11 @@ class ChargeEngine:
         self.tautomer_enumerator = TautomerEnumerator()
         self.SMARTS_DICT = {
                 "strong_basic": 
-                    {"groups": ["[#7]", "[#6-]"], "sites": [0, 1]}, # TODO: exclude NH acids.
+                    {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 1]}, # TODO: exclude NH acids.
                 "weak_basic":  # TODO: =O (etc) groups? can be C=O, P=O etc.
                     {"groups": [], "sites": []}, 
                 "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+ acids)
-                    {"groups": ["[#6,#16](=O)[OX2H]", "[#7+;!H0]"], "sites": [2, 0]},
+                    {"groups": ["[#6+0,#16+0](=O+0)[OX2H]", "[#7+;!H0]"], "sites": [2, 0]},
                 "weak_acidic": # TODO: CH/NH acids. C=CCC=C (aromatic or non),C(=O)CC(=O), N#[CH], N2O-CHn. See IUPAC dataset for examples.
                     {"groups": [], "sites": []} 
                 }
