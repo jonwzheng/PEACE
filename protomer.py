@@ -1,5 +1,5 @@
 from rdkit.Chem import AllChem, Mol, Draw
-from common import protonate_at_site, deprotonate_at_site, extract_matches_from_smarts_collection
+from common import protonate_at_site, deprotonate_at_site, extract_matches_from_smarts_collection, canon_smiles
 
 import copy
 import itertools
@@ -10,7 +10,7 @@ import pandas as pd
 class Protomer:
     # TODO: This module should be compatible with any charge object.
     def __init__(self, smiles: str = "", mol: Mol = None):
-        self.smiles = AllChem.CanonSmiles(smiles)
+        self.smiles = canon_smiles(smiles)
         self.mol = mol
         self.ionization_sites = []
 
@@ -115,8 +115,8 @@ class Tautomer:
         idx = list(self.protomers.keys())[-1] + 1
 
         # Check for isomorphic
-        existing_smiles = [AllChem.CanonSmiles(p.smiles) for p in self.protomers.values()]
-        if any([AllChem.CanonSmiles(protomer.smiles) == x for x in existing_smiles]):
+        existing_smiles = [canon_smiles(p.smiles) for p in self.protomers.values()]
+        if any([canon_smiles(protomer.smiles) == x for x in existing_smiles]):
             warnings.warn(f"Protomer {protomer.smiles} not added due to degeneracy.")
             # TODO: include degeneracy for this species. May need to rewrite code, maybe 2 dicts?
         else:

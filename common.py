@@ -1,5 +1,7 @@
+from rdkit import Chem
 from rdkit.Chem import Mol
 from PIL import Image
+from rdkit.Chem.rdchem import KekulizeException, AtomKekulizeException
 
 def protonate_at_site(mol : Mol, site : int):
     '''
@@ -90,3 +92,19 @@ def show_images(imgs: list, buffer: int = 5, mode = "vertical"):
             x += img.width + buffer
     
     res.show()
+
+def canon_smiles(smiles: str) -> str:
+    """
+    Canonicalize a SMILES string.
+    """
+    mol = Chem.MolFromSmiles(smiles, sanitize=False)
+    try:
+        Chem.SanitizeMol(mol)
+    except:
+        try:
+            Chem.SanitizeMol(mol, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES)
+        except (KekulizeException, AtomKekulizeException):
+            Chem.SanitizeMol(mol, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES ^ Chem.SANITIZE_KEKULIZE)
+    if mol:
+        return Chem.MolToSmiles(mol)
+    return None
