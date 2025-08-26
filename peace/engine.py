@@ -1,4 +1,4 @@
-from protomer import Tautomer, Species
+from .protomer import Tautomer, Species
 from rdkit.Chem import AllChem, Mol, Atom
 from rdkit.Chem.MolStandardize.rdMolStandardize import TautomerEnumerator
 

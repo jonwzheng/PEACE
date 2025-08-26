@@ -1,5 +1,5 @@
 from rdkit.Chem import AllChem, Mol, Draw
-from common import protonate_at_site, deprotonate_at_site, extract_matches_from_smarts_collection, canon_smiles
+from .common import protonate_at_site, deprotonate_at_site, extract_matches_from_smarts_collection, canon_smiles
 
 import copy
 import itertools

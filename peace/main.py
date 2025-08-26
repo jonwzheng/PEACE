@@ -1,6 +1,6 @@
-from protomer import Protomer, Tautomer, Species
-from engine import ChargeEngine
-from common import show_images
+from .protomer import Species
+from .engine import ChargeEngine
+from .common import show_images
 from rdkit.Chem import Draw
 
 
