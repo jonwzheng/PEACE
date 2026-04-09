@@ -1,8 +1,7 @@
-from .protomer import Species
-from .engine import ChargeEngine
-from .common import show_images
+from peace.protomer import Species
+from peace.engine import ChargeEngine
+from peace.common import show_images
 from rdkit.Chem import Draw
-
 
 if __name__ == "__main__":
 #    spec = Species.from_smiles("NCC(=O)CCCC(O)CC(O)CC(N)(N)CN")
