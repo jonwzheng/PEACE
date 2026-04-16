@@ -106,7 +106,6 @@ class Tautomer:
         """
         
         # TODO: assert number of N[H1,H2,H3]+ groups MINUS the  number of [X-] groups is equal to the overall charge.
-        warnings.warn("Generating uncharged protomer from a non-zero-charge protomer is not implemented yet.")
         return protomer
 
     def embed_protomer(self, protomer: Protomer):

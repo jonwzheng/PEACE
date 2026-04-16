@@ -13,7 +13,7 @@ def _build_cli_parser():
         action="store_true",
         help="If set, run the solvation energy workflow for all generated protomers (requires xTB + g-xTB binaries).",
     )
-    p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation", help="Scratch root for xTB runs.")
+    p.add_argument("--scratch-root", type=str, default="./solvation_results", help="Scratch root for xTB runs.")
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories after each protomer run.")
     p.add_argument("--no-plot", action="store_true", help="Skip RDKit image rendering.")
     p.add_argument(
@@ -42,12 +42,7 @@ def _run_demo(smiles: str, *, no_plot: bool) -> Species:
         basic_sites = engine.search_ionization_centers(taut, "strong_basic")
         taut.generate_protomers_from_base_protomer(acid_sites, basic_sites)
 
-    if not no_plot:
-        imgs = spec.generate_protomer_plot(n_columns=5)
-        show_images(imgs, mode="vertical")
-    print(spec.to_dataframe())
     return spec
-
 
 if __name__ == "__main__":
     args = _build_cli_parser().parse_args()
@@ -62,6 +57,9 @@ if __name__ == "__main__":
             conformer_mode=args.conformer_mode,
             external_xyz_path=args.external_xyz,
             keep_scratch=bool(args.keep_scratch),
-            hess_charge_mode=args.hess_charge_mode,
             dry_run=bool(args.dry_run),
         )
+    if not args.no_plot:
+        imgs = spec.generate_protomer_plot(n_columns=5)
+        show_images(imgs, mode="vertical")
+        print(spec.to_dataframe())

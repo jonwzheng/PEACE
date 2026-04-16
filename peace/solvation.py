@@ -1,8 +1,10 @@
 import re
 import shutil
+import shlex
 import subprocess
 import warnings
 import uuid
+from datetime import datetime
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,8 +18,20 @@ from .protomer import Protomer, Species, Tautomer
 HARTREE_TO_KCAL_MOL = 627.5094740631
 
 
+def _append_log(log_path: Path, message: str) -> None:
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{timestamp}] {message}\n")
+
+
+def _log_status(log_paths: list[Path], status: str, message: str) -> None:
+    for log_path in log_paths:
+        _append_log(log_path, f"{status}: {message}")
+
+
 def _run(
-    cmd: list[str],
+    cmd: str | list[str],
     *,
     cwd: Path,
     timeout_s: Optional[int] = None,
@@ -32,6 +46,7 @@ def _run(
     return subprocess.run(
         cmd,
         cwd=str(cwd),
+        shell=isinstance(cmd, str),
         capture_output=True,
         text=True,
         timeout=timeout_s,
@@ -94,18 +109,15 @@ def _embed_conformers_rdkit_mmff94(
     mol_in = Chem.Mol(mol)
     mol_h = Chem.AddHs(mol_in, addCoords=False)
 
-    params = AllChem.KDG() # using KDG to suit solutes better than ETKDGv3
+    # Use RDKit's ETKDGv3 parameters for robust conformer generation.
+    params = AllChem.ETKDGv3()
     params.randomSeed = int(random_seed)
     params.numThreads = 0
+    params.maxAttempts = int(max_attempts)
+    params.useExpTorsionAnglePrefs = False
 
-    conf_ids = list(
-        AllChem.EmbedMultipleConfs(
-            mol_h,
-            numConfs=int(n_confs),
-            params=params,
-            maxAttempts=int(max_attempts),
-        )
-    )
+    # Use the (mol, numConfs, params) overload; kwargs not supported
+    conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
     if not conf_ids:
         raise RuntimeError("RDKit conformer embedding produced no conformers.")
 
@@ -251,25 +263,26 @@ def run_protomer_solvation(
     """
     scratch_root = Path(scratch_root)
     scratch_root.mkdir(parents=True, exist_ok=True)
+    workflow_log = scratch_root / "peace.out"
 
     # Naming: unique per protomer run to prevent collisions/overwrites
     # even if caller uses the same scratch_root for multiple protomers.
     unique_suffix = uuid.uuid4().hex[:8]
     scratch_dir = scratch_root / f"protomer_{protomer_id}_{unique_suffix}"
-    scratch_dir.mkdir(parents=True, exist_ok=True)
-
-    # Clean scratch_dir if it already exists to prevent cross-contamination.
-    for p in scratch_dir.iterdir():
-        if p.is_file():
-            p.unlink()
-        else:
-            shutil.rmtree(p, ignore_errors=True)
+    scratch_dir.mkdir(parents=True, exist_ok=False)
+    run_log = scratch_dir / "run.out"
+    log_paths = [workflow_log, run_log]
 
     mol = protomer.mol
     if mol is None:
         raise ValueError("Protomer.mol is None; cannot run workflow.")
 
     charge = int(charge_override) if charge_override is not None else _formal_charge(mol)
+    _log_status(
+        log_paths,
+        "START",
+        f"protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode}",
+    )
 
     conformer_energy_kcal_mol: Optional[float] = None
     xtbopt_xyz_path: Optional[Path] = None
@@ -280,12 +293,18 @@ def run_protomer_solvation(
 
     try:
         # 1) Conformer search / input geometry selection.
+        _log_status(log_paths, "STEP", "starting conformer preparation")
         if conformer_mode == "mmff94":
             mol_best, best_energy, best_conf_id = _embed_conformers_rdkit_mmff94(mol)
             conformer_energy_kcal_mol = best_energy
             mol = mol_best
             protomer.mol = mol
             protomer.mol.SetProp("peace_conformer_mode", "mmff94")
+            _log_status(
+                log_paths,
+                "OK",
+                f"rdkit conformer search complete best_conf_id={best_conf_id} best_energy_kcal_mol={best_energy}",
+            )
         elif conformer_mode == "external_xyz":
             if external_xyz_path is None:
                 raise ValueError("external_xyz_path must be provided for conformer_mode='external_xyz'.")
@@ -296,24 +315,29 @@ def run_protomer_solvation(
                 raise ValueError("External xyz produced a molecule without conformers.")
             protomer.mol = mol
             protomer.mol.SetProp("peace_conformer_mode", "external_xyz")
+            _log_status(log_paths, "OK", f"loaded external xyz from {external_xyz_path}")
         elif conformer_mode == "skip_search":
             if mol.GetNumConformers() == 0:
                 raise ValueError("conformer_mode='skip_search' but molecule has no conformers.")
             protomer.mol = mol
             protomer.mol.SetProp("peace_conformer_mode", "skip_search")
+            _log_status(log_paths, "OK", "using existing conformer on protomer.mol")
         else:
             raise ValueError(f"Unknown conformer_mode: {conformer_mode}")
 
         # Write xyz for xTB.
         input_xyz_path = scratch_dir / "input.xyz"
         _write_xyz(mol, input_xyz_path, conf_id=0)
+        _log_status(log_paths, "OK", f"wrote input geometry to {input_xyz_path.name}")
 
         # README: write .CHRG with just contents of the integer charge.
         # xTB can also accept --chrg btw, but g-xTB can't righ tnow
         (scratch_dir / ".CHRG").write_text(str(charge))
+        _log_status(log_paths, "OK", f"wrote .CHRG with charge={charge}")
 
         # In dry-run mode, do not attempt to execute xTB/g-xTB (no outputs will exist).
         if dry_run:
+            _log_status(log_paths, "SKIP", "dry_run enabled; skipping xTB/g-xTB steps")
             _set_mol_prop_double(
                 protomer.mol,
                 "peace_conformer_energy_kcal_mol",
@@ -332,30 +356,36 @@ def run_protomer_solvation(
 
         # 2) g-xTB optimization with implicit solvent and loose coordinates.
         xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
-        cmd_opt = [
-            xtb_executable,
-            str(input_xyz_path),
-            "--driver",
-            "gxtb -grad -c xtbdriver.xyz",
-            "--opt",
-            opt_level,
-            "--alpb",
-            solvent,
-        ]
+        # Run this exactly in the shell form documented in the README:
+        # xtb input.xyz --driver "gxtb -grad -c xtbdriver.xyz" --opt loose --alpb water
+        cmd_opt = (
+            f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
+            f'--driver "gxtb -grad -c xtbdriver.xyz" '
+            f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)}"
+        )
+        _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
         cp_opt = _run(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
         if cp_opt.returncode != 0:
+            _log_status(
+                log_paths,
+                "FAIL",
+                f"optimization failed returncode={cp_opt.returncode} stdout_tail={cp_opt.stdout[-1000:]} stderr_tail={cp_opt.stderr[-1000:]}",
+            )
             raise RuntimeError(
                 f"xTB optimization (gxtb driver) failed with code {cp_opt.returncode}.\n"
                 f"stdout:\n{cp_opt.stdout[-4000:]}\n"
                 f"stderr:\n{cp_opt.stderr[-4000:]}\n"
             )
         if not xtbopt_xyz_path.exists():
+            _log_status(log_paths, "FAIL", "optimization finished but xtbopt.xyz was not produced")
             raise FileNotFoundError("Expected output xtbopt.xyz was not produced by xTB.")
+        _log_status(log_paths, "OK", f"optimization produced {xtbopt_xyz_path.name}")
 
         # Update protomer geometry to the optimized geometry (keepable for debugging).
         mol_opt = Chem.MolFromXYZFile(str(xtbopt_xyz_path))
         if mol_opt is not None and mol_opt.GetNumConformers() > 0:
             protomer.mol = mol_opt
+            _log_status(log_paths, "OK", "updated protomer geometry from xtbopt.xyz")
 
         # 3) CPCM-X SP solvation energy calculation using GFN2-xTB.
         cmd_sp = [
@@ -368,8 +398,14 @@ def run_protomer_solvation(
             "--gfn",
             str(gfn),
         ]
+        _log_status(log_paths, "STEP", f"running CPCM-X SP: {' '.join(shlex.quote(x) for x in cmd_sp)}")
         cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
         if cp_sp.returncode != 0:
+            _log_status(
+                log_paths,
+                "FAIL",
+                f"CPCM-X SP failed returncode={cp_sp.returncode} stdout_tail={cp_sp.stdout[-1000:]} stderr_tail={cp_sp.stderr[-1000:]}",
+            )
             raise RuntimeError(
                 f"xTB CPCM-X SP calculation failed with code {cp_sp.returncode}.\n"
                 f"stdout:\n{cp_sp.stdout[-4000:]}\n"
@@ -383,6 +419,11 @@ def run_protomer_solvation(
             solvation_free_energy_h = _parse_xtb_total_free_energy_hartree(cp_sp.stdout)
         if solvation_free_energy_h is not None:
             solvation_free_energy_kcal_mol = solvation_free_energy_h * HARTREE_TO_KCAL_MOL
+        _log_status(
+            log_paths,
+            "OK",
+            f"parsed solvation_free_energy_kcal_mol={solvation_free_energy_kcal_mol}",
+        )
 
         # Gas-phase SP energy is derived from the hess output (step 4).
 
@@ -397,8 +438,14 @@ def run_protomer_solvation(
             "--gfn",
             str(gfn),
         ]
+        _log_status(log_paths, "STEP", f"running hessian: {' '.join(shlex.quote(x) for x in cmd_hess)}")
         cp_hess = _run(cmd_hess, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
         if cp_hess.returncode != 0:
+            _log_status(
+                log_paths,
+                "FAIL",
+                f"hessian failed returncode={cp_hess.returncode} stdout_tail={cp_hess.stdout[-1000:]} stderr_tail={cp_hess.stderr[-1000:]}",
+            )
             raise RuntimeError(
                 f"xTB hess calculation failed with code {cp_hess.returncode}.\n"
                 f"stdout:\n{cp_hess.stdout[-4000:]}\n"
@@ -435,8 +482,17 @@ def run_protomer_solvation(
                 + frequency_contribution_kcal_mol
                 + solvation_free_energy_kcal_mol
             )
+        _log_status(
+            log_paths,
+            "OK",
+            "parsed energies "
+            f"gas_sp_energy_kcal_mol={gas_sp_energy_kcal_mol} "
+            f"frequency_contribution_kcal_mol={frequency_contribution_kcal_mol} "
+            f"solution_phase_free_energy_kcal_mol={solution_phase_free_energy_kcal_mol}",
+        )
 
     except Exception as e:
+        _log_status(log_paths, "FAIL", f"workflow exception for protomer_id={protomer_id}: {e}")
         warnings.warn(
             f"Solvation workflow failed for protomer_id={protomer_id}: {e}",
             RuntimeWarning,
@@ -452,6 +508,7 @@ def run_protomer_solvation(
 
         keep = keep_scratch or keep_scratch_on_failure
         if not keep and scratch_dir.exists() and not dry_run:
+            _log_status(log_paths, "CLEANUP", "removing scratch directory after failed run")
             shutil.rmtree(scratch_dir, ignore_errors=True)
 
         return SolvationWorkflowResult(
@@ -488,9 +545,16 @@ def run_protomer_solvation(
         gxtb_optimized_xyz_to_report = None
 
     if not keep_scratch and scratch_dir.exists() and not dry_run:
+        _log_status(log_paths, "CLEANUP", "removing scratch directory after successful run")
         shutil.rmtree(scratch_dir, ignore_errors=True)
 
     stdout_tail = f"ok; parsed values: solv={solvation_free_energy_kcal_mol}, gas={gas_sp_energy_kcal_mol}"
+    _log_status(
+        log_paths,
+        "SUCCESS",
+        f"protomer_id={protomer_id} solv={solvation_free_energy_kcal_mol} gas={gas_sp_energy_kcal_mol} "
+        f"freq={frequency_contribution_kcal_mol} solution={solution_phase_free_energy_kcal_mol}",
+    )
 
     return SolvationWorkflowResult(
         conformer_energy_kcal_mol=conformer_energy_kcal_mol,
