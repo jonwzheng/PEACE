@@ -11,15 +11,18 @@ if __name__ == "__main__":
     spec = Species.from_smiles("NCCCC(=O)CCC(=O)O")
     engine = ChargeEngine()
     
-    list_of_tautomers = engine.search_for_tautomers(spec)
-    print(list_of_tautomers)
-    spec.embed_tautomers_from_list_of_smiles(list_of_tautomers)
+    tautomers = engine.search_for_tautomers(spec)
+    print(tautomers) # just a list of SMILES strings. Could be provided manually if desired.
+
+    spec.embed_tautomers_from_list_of_smiles(tautomers)
+    print(spec)
+
+    # generate protomers for each tautomer based on available acid/base sites.
     for taut in spec.tautomers.values():
         acid_sites = engine.search_ionization_centers(taut, "strong_acidic")
         basic_sites = engine.search_ionization_centers(taut, "strong_basic")
         taut.generate_protomers_from_base_protomer(acid_sites, basic_sites)
 
-    print(spec)
     imgs = spec.generate_protomer_plot(n_columns = 5)
     show_images(imgs, mode="vertical")
     print(spec.to_dataframe())

@@ -40,8 +40,7 @@ class ChargeEngine:
         ref_mol = spec.tautomers[0].protomers[0].mol
         results = self.tautomer_enumerator.Enumerate(mol = ref_mol)
 
-        # Find atoms that correspond to forbidden groups
-        # TODO: move this code to engine
+        # TODO: Find atoms that correspond to forbidden groups
         # see https://github.com/rdkit/rdkit/discussions/6822
         # Exclude also if it falls into an [aromatic - aromatic(OH/NH) - aromatic]
 
@@ -69,6 +68,8 @@ class ChargeEngine:
 
 
         ref_mol_atoms = ref_mol.GetAtoms()
+
+        # exclude duplicate tautomers
         for smiles in results.smiles:
             tautomerized_atoms = []
             analyte_mol = AllChem.MolFromSmiles(smiles)
@@ -80,5 +81,4 @@ class ChargeEngine:
             if not all([x in tautomerized_atoms for x in atom_ids]) or len(atom_ids) == 0:
                 candidate_smiles.append(smiles)
                 
-
         return candidate_smiles

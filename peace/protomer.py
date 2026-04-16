@@ -58,7 +58,7 @@ class Tautomer:
     def find_ionization_sites(self, query_substructs: list[Mol], query_sites: list[int]) -> list[int]:
         """
         Takes the base protomer mol and tries to find the acidic or basic sites on it matching query.
-        Retursn a list of atom indices. 
+        Returns a list of atom indices. 
         """
         sites = []
         base_mol = copy.deepcopy(self.protomers[0].mol)
@@ -82,7 +82,10 @@ class Tautomer:
             acid_sites: list of acidity centers for mol
             basic_sites: list of basic centers for mol
         """
-        acid_base_pairs = [r for r in itertools.product(acidic_sites, basic_sites)]
+
+        # simultaneously consider all acid-base pairs
+        # basically this gives us zwitterions
+        acid_base_pairs = [r for r in itertools.product(acidic_sites, basic_sites)] 
         for acid_base_pair in acid_base_pairs:
             mol = copy.deepcopy(self.protomers[0].mol)
 
@@ -98,10 +101,11 @@ class Tautomer:
     def generate_uncharged_protomer(self, protomer: Protomer) -> Protomer:
         """
         Given a protomer, finds the uncharged variant as a mol object.
-        TODO: get this to work for non-zero charge. TODO is to do this at all.
+        TODO: get this to work for non-zero charge. 
         """
         
         # TODO: assert number of N[H1,H2,H3]+ groups MINUS the  number of [X-] groups is equal to the overall charge.
+        warnings.warn("Generating uncharged protomer from a non-zero-charge protomer is not implemented yet.")
         return protomer
 
     def embed_protomer(self, protomer: Protomer):
@@ -180,7 +184,7 @@ class Species:
         return list(set(smiles))
 
     def embed_tautomers_from_list_of_smiles(self, tautomer_smiles: list[str]):
-        """ Embed tautomers from a list of SMILES strings."""
+        """ Embeds tautomers from a list of SMILES strings."""
         for smiles in tautomer_smiles:
             if smiles not in self.get_all_smiles():
                 tautomer = Tautomer.from_smiles(smiles)
