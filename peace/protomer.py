@@ -9,6 +9,7 @@ import pandas as pd
 
 class Protomer:
     # TODO: This module should be compatible with any charge object.
+
     def __init__(self, smiles: str = "", mol: Mol = None):
         self.smiles = canon_smiles(smiles)
         self.mol = mol

@@ -10,5 +10,6 @@ __all__ = [
     "protomer",
     "engine", 
     "common",
-    "main"
+    "main",
+    "solvation",
 ]
