@@ -167,6 +167,44 @@ def _write_xyz(mol: Chem.Mol, path: Path, *, conf_id: int = 0) -> None:
     path.write_text(xyz)
 
 
+def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: float = 1.05) -> int:
+    """
+    Build xTB xcontrol constraints for protonated nitrogens and attached H atoms.
+
+    For each ammonium-like N+ center, write:
+      $fix
+       distance: N_idx, H_idx, <fixed_distance>
+      $end
+
+    Returns number of generated distance constraints.
+    """
+    mol_h = Chem.AddHs(Chem.Mol(mol), addCoords=True)
+    constraints: list[str] = []
+
+    for atom in mol_h.GetAtoms():
+        if atom.GetAtomicNum() != 7:
+            continue
+        if atom.GetFormalCharge() <= 0:
+            continue
+
+        h_neighbors = [nbr for nbr in atom.GetNeighbors() if nbr.GetAtomicNum() == 1]
+        if not h_neighbors:
+            continue
+
+        n_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
+        for h_atom in h_neighbors:
+            h_idx = h_atom.GetIdx() + 1
+            constraints.append(f" distance: {n_idx}, {h_idx}, {fixed_distance:.2f}")
+
+    if constraints:
+        content = "$fix\n" + "\n".join(constraints) + "\n$end\n"
+        xcontrol_path.write_text(content)
+    elif xcontrol_path.exists():
+        xcontrol_path.unlink()
+
+    return len(constraints)
+
+
 def _parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
@@ -271,6 +309,8 @@ def _prepare_protomer_conformer(
     mol = protomer.mol
     if mol is None:
         raise ValueError("Protomer.mol is None; cannot run workflow.")
+    if getattr(protomer, "input_mol", None) is None:
+        protomer.input_mol = Chem.Mol(mol)
 
     _log_status(log_paths, "STEP", "starting conformer preparation")
     conformer_energy_kcal_mol: Optional[float] = None
@@ -296,6 +336,8 @@ def _prepare_protomer_conformer(
         if mol.GetNumConformers() == 0:
             raise ValueError("External xyz produced a molecule without conformers.")
         protomer.mol = mol
+        if getattr(protomer, "input_mol", None) is None:
+            protomer.input_mol = Chem.Mol(mol)
         protomer.mol.SetProp("peace_conformer_mode", "external_xyz")
         _log_status(log_paths, "OK", f"loaded external xyz from {external_xyz_path}")
         return protomer.mol, conformer_energy_kcal_mol
@@ -304,6 +346,8 @@ def _prepare_protomer_conformer(
         if mol.GetNumConformers() == 0:
             raise ValueError("conformer_mode='skip_search' but molecule has no conformers.")
         protomer.mol = mol
+        if getattr(protomer, "input_mol", None) is None:
+            protomer.input_mol = Chem.Mol(mol)
         protomer.mol.SetProp("peace_conformer_mode", "skip_search")
         _log_status(log_paths, "OK", "using existing conformer on protomer.mol")
         return protomer.mol, conformer_energy_kcal_mol
@@ -323,6 +367,7 @@ def _write_workflow_inputs(mol: Chem.Mol, scratch_dir: Path, charge: int, log_pa
 
 def _run_xtb_optimization(
     *,
+    mol: Chem.Mol,
     scratch_dir: Path,
     input_xyz_path: Path,
     xtb_executable: str,
@@ -333,8 +378,27 @@ def _run_xtb_optimization(
     log_paths: list[Path],
 ) -> Path:
     xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
+    xcontrol_path = scratch_dir / "xcontrol.inp"
+    n_constraints = _build_fix_xcontrol(
+        mol,
+        xcontrol_path,
+        fixed_distance=1.01,
+    )
+
+    input_flag = ""
+    if n_constraints > 0:
+        input_flag = f" --input {shlex.quote(xcontrol_path.name)}"
+        _log_status(
+            log_paths,
+            "OK",
+            f"generated xcontrol constraints for ammonium-like N-H bonds: n_constraints={n_constraints}",
+        )
+    else:
+        _log_status(log_paths, "OK", "no ammonium-like N-H constraints generated")
+
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
+        f"{input_flag}"
         f'--driver "gxtb -grad -c xtbdriver.xyz" '
         f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)}"
     )
@@ -630,6 +694,7 @@ def run_protomer_solvation(
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
 
         xtbopt_xyz_path = _run_xtb_optimization(
+            mol=mol,
             scratch_dir=scratch_dir,
             input_xyz_path=input_xyz_path,
             xtb_executable=xtb_executable,

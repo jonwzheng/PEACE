@@ -13,6 +13,8 @@ class Protomer:
     def __init__(self, smiles: str = "", mol: Mol = None):
         self.smiles = canon_smiles(smiles)
         self.mol = mol
+        # Keep a copy of the pre-optimization/input molecular graph for display/export.
+        self.input_mol = copy.deepcopy(mol) if mol is not None else None
         self.ionization_sites = []
 
     def __repr__(self):
@@ -100,7 +102,7 @@ class Tautomer:
             if new_protomer.smiles != new_smiles:
                 warnings.warn(
                     f"Protomer SMILES mismatch after protonation/deprotonation: "
-                    f"expected={new_protomer.smiles}, actual={expected_smiles}. "
+                    f"expected={new_smiles}, actual={new_protomer.smiles}. "
                     "Replacing stored SMILES with actual value."
                 )
                 # Keep running, but force a smiles value that reflects the transformed mol.
@@ -139,8 +141,15 @@ class Tautomer:
 
     def generate_protomer_plot(self, n_columns : int):
         """ Plots up to n_columns showing the mol objects. Returns an image."""
-        mols = [p.mol for p in self.protomers.values()]
-        [p.highlight_ionization_sites() for p in self.protomers.values()]
+        # Prefer the original input molecular graph for display because optimized xyz
+        # geometries can lack bond assignment.
+        mols = []
+        for p in self.protomers.values():
+            display_mol = p.input_mol if p.input_mol is not None else p.mol
+            if display_mol is not None:
+                display_mol = copy.deepcopy(display_mol)
+                display_mol.__sssAtoms = p.ionization_sites
+            mols.append(display_mol)
         n_rows = int(np.ceil(len(mols) / n_columns))
         n_padding = n_rows * n_columns - len(mols)
         mols.extend([None]*n_padding)
@@ -204,24 +213,29 @@ class Species:
                 warnings.warn(f"Tautomer with SMILES {smiles} not added as already embedded in species.")
         
     def to_dataframe(self):
-        spec_ids = []
-        taut_ids = []
-        prot_ids = []
-        prot_smiles = []
-
+        rows = []
+        solvation_props = [
+            "peace_conformer_energy_kcal_mol",
+            "peace_solvation_free_energy_kcal_mol",
+            "peace_gas_sp_energy_kcal_mol",
+            "peace_frequency_contribution_kcal_mol",
+            "peace_solution_phase_free_energy_kcal_mol",
+        ]
         for taut_idx, tautomer in self.tautomers.items():
             for prot_idx, protomer in tautomer.protomers.items():
-                spec_ids.append(self.key)
-                taut_ids.append(taut_idx)
-                prot_ids.append(prot_idx)
-                prot_smiles.append(protomer.smiles)
-                
-        return pd.DataFrame.from_dict({"species_id" : spec_ids,
-                                       "tautomer_id": taut_ids,
-                                       "protomer_id": prot_ids,
-                                       "protomer_smiles": prot_smiles,
-                                       }
-                                    )
+                row = {
+                    "species_id": self.key,
+                    "tautomer_id": taut_idx,
+                    "protomer_id": prot_idx,
+                    "protomer_smiles": protomer.smiles,
+                }
+                if protomer.mol is not None:
+                    for prop in solvation_props:
+                        if protomer.mol.HasProp(prop):
+                            row[prop] = protomer.mol.GetProp(prop)
+                rows.append(row)
+
+        return pd.DataFrame(rows)
     
     def generate_protomer_plot(self, n_columns: int = 5):
         imgs = []
