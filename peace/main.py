@@ -24,7 +24,7 @@ def _build_cli_parser():
         help="Conformer geometry input for xTB runs.",
     )
     p.add_argument("--external-xyz", type=str, default=None, help="Path to external xyz (used only with conformer-mode=external_xyz).")
-    p.add_argument("--dry-run", action="store_true", help="Do not execute xTB; still run embedding/IO.")
+    p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
     return p
 
 
@@ -62,4 +62,4 @@ if __name__ == "__main__":
     if not args.no_plot:
         imgs = spec.generate_protomer_plot(n_columns=5)
         show_images(imgs, mode="vertical")
-        print(spec.to_dataframe())
+    print(spec.to_dataframe())

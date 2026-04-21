@@ -1,5 +1,5 @@
 from .protomer import Tautomer, Species
-from rdkit.Chem import AllChem, Mol, Atom
+from rdkit.Chem import AllChem, Mol, Atom, ValenceType
 from rdkit.Chem.MolStandardize.rdMolStandardize import TautomerEnumerator
 
 import warnings
@@ -55,9 +55,10 @@ class ChargeEngine:
         candidate_smiles = [spec.tautomers[0].protomers[0].smiles]
 
         def check_atom_for_equivalence(atom_1: Atom, atom_2: Atom) -> bool:
-            for m in ['GetFormalCharge', 'GetNumImplicitHs', 'GetAtomicNum', 'GetDegree','GetHybridization',
-                      'GetExplicitValence']:
+            for m in ['GetFormalCharge', 'GetNumImplicitHs', 'GetAtomicNum', 'GetDegree','GetHybridization']:
                 if getattr(atom_1, m)() != getattr(atom_2, m)():
+                    return False
+                if getattr(atom_1, 'GetValence')(ValenceType.EXPLICIT) != getattr(atom_2, 'GetValence')(ValenceType.EXPLICIT):
                     return False
             for idx, bond_1 in enumerate(atom_1.GetBonds()):
                 bond_2 = atom_2.GetBonds()[idx]

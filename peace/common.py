@@ -13,11 +13,13 @@ def protonate_at_site(mol : Mol, site : int):
     '''
 
     atom = mol.GetAtomWithIdx(site)
+    # Use atom-local hydrogen count only (never include neighboring atoms),
+    # otherwise basic nitrogens can be over-protonated.
+    hcount = atom.GetTotalNumHs(includeNeighbors=False)
     atom.SetFormalCharge(atom.GetFormalCharge() + 1)
-
-    hcount = atom.GetTotalNumHs(includeNeighbors=True)
-    newcharge = hcount + 1
-    atom.SetNumExplicitHs(newcharge)
+    atom.SetNumExplicitHs(max(0, int(hcount) + 1))
+    atom.SetNoImplicit(True)
+    atom.UpdatePropertyCache(False)
 
 
 def deprotonate_at_site(mol : Mol, site : int):
@@ -28,12 +30,13 @@ def deprotonate_at_site(mol : Mol, site : int):
         site: RDKit atom index of the site to be de/protonated.
     '''
 
-    atom = mol.GetAtomWithIdx(site)    
+    atom = mol.GetAtomWithIdx(site)
+    # Use atom-local hydrogen count only (never include neighboring atoms).
+    hcount = atom.GetTotalNumHs(includeNeighbors=False)
     atom.SetFormalCharge(atom.GetFormalCharge() - 1)
-
-    hcount = atom.GetTotalNumHs(includeNeighbors=True)
-    newcharge = hcount - 1
-    atom.SetNumExplicitHs(newcharge)
+    atom.SetNumExplicitHs(max(0, int(hcount) - 1))
+    atom.SetNoImplicit(True)
+    atom.UpdatePropertyCache(False)
 
 def extract_matches_from_smarts_collection(query_mol: Mol, groups: list[Mol], sites: list[int]) -> list[int]:
     """

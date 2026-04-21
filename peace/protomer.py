@@ -94,7 +94,18 @@ class Tautomer:
             basic_idx = acid_base_pair[1]
             protonate_at_site(mol, basic_idx)
             deprotonate_at_site(mol, acidic_idx)
+
+            new_smiles = canon_smiles(AllChem.MolToSmiles(mol))
             new_protomer = Protomer.from_mol(mol)
+            if new_protomer.smiles != new_smiles:
+                warnings.warn(
+                    f"Protomer SMILES mismatch after protonation/deprotonation: "
+                    f"expected={new_protomer.smiles}, actual={expected_smiles}. "
+                    "Replacing stored SMILES with actual value."
+                )
+                # Keep running, but force a smiles value that reflects the transformed mol.
+                new_protomer.smiles = new_smiles
+
             new_protomer.ionization_sites = [basic_idx, acidic_idx]
             self.embed_protomer(new_protomer)
 

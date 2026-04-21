@@ -95,7 +95,6 @@ def _embed_conformers_rdkit_mmff94(
     *,
     n_confs: int = 100,
     random_seed: int = 0,
-    max_attempts: int = 2000,
     mmff_max_iters: int = 500,
 ) -> tuple[Chem.Mol, float, int]:
     """
@@ -113,7 +112,6 @@ def _embed_conformers_rdkit_mmff94(
     params = AllChem.ETKDGv3()
     params.randomSeed = int(random_seed)
     params.numThreads = 0
-    params.maxAttempts = int(max_attempts)
     params.useExpTorsionAnglePrefs = False
 
     # Use the (mol, numConfs, params) overload; kwargs not supported
