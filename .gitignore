@@ -1,6 +1,9 @@
 # project specific
 NOTES.md
+solvation_results/
+results.csv
 peace/solvation_results/
+peace/results.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

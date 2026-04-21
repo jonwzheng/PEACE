@@ -2,6 +2,7 @@ from peace.protomer import Species
 from peace.engine import ChargeEngine
 from peace.common import show_images
 from rdkit.Chem import Draw
+from pathlib import Path
 
 def _build_cli_parser():
     import argparse
@@ -25,6 +26,12 @@ def _build_cli_parser():
     )
     p.add_argument("--external-xyz", type=str, default=None, help="Path to external xyz (used only with conformer-mode=external_xyz).")
     p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
+    p.add_argument(
+        "--output-csv",
+        type=str,
+        default="results.csv",
+        help="Path to save the final dataframe as CSV.",
+    )
     return p
 
 
@@ -62,4 +69,11 @@ if __name__ == "__main__":
     if not args.no_plot:
         imgs = spec.generate_protomer_plot(n_columns=5)
         show_images(imgs, mode="vertical")
-    print(spec.to_dataframe())
+    df = spec.to_dataframe()
+    print(df)
+
+    if args.output_csv:
+        output_path = Path(args.output_csv)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, index=False)
+        print(f"Saved dataframe CSV to: {output_path}")
