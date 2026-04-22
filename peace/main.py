@@ -45,8 +45,8 @@ def _run_demo(smiles: str, *, no_plot: bool) -> Species:
 
     # Generate protomers for each tautomer based on available acid/base sites.
     for taut in spec.tautomers.values():
-        acid_sites = engine.search_ionization_centers(taut, "strong_acidic")
-        basic_sites = engine.search_ionization_centers(taut, "strong_basic")
+        acid_sites = engine.search_ionization_centers(taut, "acidic")
+        basic_sites = engine.search_ionization_centers(taut, "basic")
         taut.generate_protomers_from_base_protomer(acid_sites, basic_sites)
 
     return spec

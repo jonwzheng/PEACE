@@ -16,10 +16,10 @@ class ChargeEngine:
                     {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 1]}, # TODO: exclude NH acids.
                 "weak_basic":  # TODO: =O (etc) groups? can be C=O, P=O etc.
                     {"groups": [], "sites": []}, 
-                "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+ acids)
-                    {"groups": ["[#6,#16](=O)[OX2H]", "[#7+;!H0]"], "sites": [2, 0]},
-                "weak_acidic": # TODO: CH/NH acids. C=CCC=C (aromatic or non),C(=O)CC(=O), N#[CH], N2O-CHn. See IUPAC dataset for examples.
-                    {"groups": [], "sites": []} 
+                "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+, acidic carbons/nitrogens [(CH/C-OH or NH/N-OH) connected to C#N, or to nitrate, or C=O group)]
+                    {"groups": ["[#6,#15,#16](=O)[OX2H]", "[#7+;!H0]", "[#6,#7;!H0]C#N", "[#6,#7;!H0][N+](=O)[O-]", "[#6,#7;H!0][#6,#7;H0]=O", "N#[C;H1]"], "sites": [2, 0, 0, 0, 0, 1]},
+                "weak_acidic": # -OH, -NH, -SH acids TODO: C=CCC=C (aromatic or non), N#[CH], N2O-CHn. See IUPAC dataset for examples.
+                    {"groups": ["[#7,#8,#16;!H0]"], "sites": [0]} 
                 }
         
         for acidity_type, values in self.SMARTS_DICT.items():
@@ -27,8 +27,24 @@ class ChargeEngine:
 
     def search_ionization_centers(self, taut: Tautomer, search_type: str) -> list[int]:
         """ Given a Tautomer, returns a list of atom indices corresponding to the query acidity/basicity"""
-        if search_type not in self.SMARTS_DICT.keys():
-            raise ValueError(f"Search type must be in: {self.SMARTS_DICT.keys()}")
+        if search_type == "acidic":
+            smarts_collection = self.SMARTS_DICT["strong_acidic"]
+            collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
+            if len(collection) == 0:
+                warnings.warn(f"No strong acidic sites found for {taut.protomers[0].smiles}, searching for weak acidic sites.")
+                smarts_collection = self.SMARTS_DICT["weak_acidic"]
+                collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
+            return collection
+        elif search_type == "basic":
+            smarts_collection = self.SMARTS_DICT["strong_basic"]
+            collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
+            if len(collection) == 0:
+                warnings.warn(f"No strong basic sites found for {taut.protomers[0].smiles}, searching for weak basic sites.")
+                smarts_collection = self.SMARTS_DICT["weak_basic"]
+                collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
+            return collection
+        elif search_type not in self.SMARTS_DICT.keys():
+            raise ValueError(f"Search type must be in: {self.SMARTS_DICT.keys()}, or 'acidic' or 'basic'")
         
         smarts_collection = self.SMARTS_DICT[search_type]
         return taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
