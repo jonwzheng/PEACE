@@ -598,6 +598,30 @@ def _persist_protomer_results(
     )
 
 
+def _preserve_output_files(
+    scratch_dir: Path,
+) -> Optional[Path]:
+    if not scratch_dir.exists():
+        return None
+
+    log_paths = [scratch_dir.parent / "peace.out", scratch_dir / "run.out"]
+    preserved_dir = scratch_dir.parent / "xyz"
+    preserved_dir.mkdir(parents=True, exist_ok=True)
+
+    preserved_xtbopt_path: Optional[Path] = None
+    files_to_preserve = ["input.xyz", "xtbopt.xyz", "xtbopt.log"]
+    for file_name in files_to_preserve:
+        src = scratch_dir / file_name
+        if not src.exists():
+            continue
+        dst = preserved_dir / f"{scratch_dir.name}_{file_name}"
+        shutil.copy2(src, dst)
+        _log_status(log_paths, "KEEP", f"preserved {file_name} at {dst}")
+        if file_name == "xtbopt.xyz":
+            preserved_xtbopt_path = dst
+    return preserved_xtbopt_path
+
+
 def _cleanup_scratch_dir(
     scratch_dir: Path,
     *,
@@ -605,15 +629,14 @@ def _cleanup_scratch_dir(
     dry_run: bool,
     log_paths: list[Path],
     success: bool,
-) -> Optional[Path]:
+) -> None:
     if keep_scratch or dry_run:
-        return 1
+        return
 
     if scratch_dir.exists() and not dry_run:
         phase = "successful" if success else "failed"
         _log_status(log_paths, "CLEANUP", f"removing scratch directory after {phase} run")
         shutil.rmtree(scratch_dir, ignore_errors=True) # TODO: for some reason this is not actually working
-    return None
 
 
 def run_protomer_solvation(
@@ -626,7 +649,7 @@ def run_protomer_solvation(
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
-    opt_level: Literal["loose", "tight"] = "loose",
+    opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     keep_scratch: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -751,19 +774,19 @@ def run_protomer_solvation(
 
         stdout_tail = str(e)
 
+        preserved_xtbopt_path = _preserve_output_files(scratch_dir)
         keep = keep_scratch or keep_scratch_on_failure
-        if not keep and scratch_dir.exists() and not dry_run:
-            _cleanup_scratch_dir(
-                scratch_dir,
-                keep_scratch=False,
-                dry_run=dry_run,
-                log_paths=log_paths,
-                success=False,
-            )
+        _cleanup_scratch_dir(
+            scratch_dir,
+            keep_scratch=keep,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            success=False,
+        )
 
         return SolvationWorkflowResult(
             conformer_energy_kcal_mol=conformer_energy_kcal_mol,
-            gxtb_optimized_xyz=xtbopt_xyz_block,
+            gxtb_optimized_xyz=preserved_xtbopt_path if preserved_xtbopt_path is not None else xtbopt_xyz_path,
             solvation_free_energy_kcal_mol=None,
             gas_sp_energy_kcal_mol=None,
             frequency_contribution_kcal_mol=None,
@@ -781,8 +804,8 @@ def run_protomer_solvation(
         solution_phase_free_energy_kcal_mol=solution_phase_free_energy_kcal_mol,
     )
 
-    # TODO: why keep this as xyz path? The scratch dir will be deleted, so just report the xyz block instead
-    success = _cleanup_scratch_dir(
+    final_xtbopt_path = _preserve_output_files(scratch_dir)
+    _cleanup_scratch_dir(
         scratch_dir,
         keep_scratch=keep_scratch,
         dry_run=dry_run,
@@ -794,13 +817,13 @@ def run_protomer_solvation(
     _log_status(
         log_paths,
         "SUCCESS",
-        f"protomer_id={protomer_id} solv={solvation_free_energy_kcal_mol} gas={gas_sp_energy_kcal_mol} "
+        f"protomer_id={protomer_id} gas={gas_sp_energy_kcal_mol} solv={solvation_free_energy_kcal_mol} "
         f"freq={frequency_contribution_kcal_mol} solution={solution_phase_free_energy_kcal_mol}",
     )
 
     return SolvationWorkflowResult(
         conformer_energy_kcal_mol=conformer_energy_kcal_mol,
-        gxtb_optimized_xyz=None if success else xtbopt_xyz_path,
+        gxtb_optimized_xyz=final_xtbopt_path if final_xtbopt_path is not None else xtbopt_xyz_path,
         solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
         gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
         frequency_contribution_kcal_mol=frequency_contribution_kcal_mol,
@@ -838,13 +861,31 @@ def run_species_solvation(
     species: Species,
     *,
     scratch_root: str | Path = "./peace_scratch_solvation",
+    override_solvation: bool = False,
     **kwargs,
 ) -> dict[int | str, dict[int | str, SolvationWorkflowResult]]:
     """
     Run the solvation workflow for all tautomers, and thus their protomers.
     """
     results: dict[int | str, dict[int | str, SolvationWorkflowResult]] = {}
-    per_species_scratch = Path(scratch_root) / f"species_{species.key}"
+    scratch_root_path = Path(scratch_root)
+    scratch_root_path.mkdir(parents=True, exist_ok=True)
+    per_species_scratch = scratch_root_path / f"species_{species.key}"
+    workflow_log = scratch_root_path / "peace.out"
+
+    if per_species_scratch.exists():
+        if override_solvation:
+            warnings.warn(f"OVERRIDE: removing existing species folder before rerun: {per_species_scratch}")
+            shutil.rmtree(per_species_scratch, ignore_errors=True)
+        else:
+            msg = (
+                "Existing solvation results detected. Refusing to rerun by default. "
+                f"Found existing species folder: {per_species_scratch}. "
+                "Use --override-solvation to delete prior results and rerun."
+            )
+            _append_log(workflow_log, f"SKIP: {msg}")
+            raise FileExistsError(msg)
+
     per_species_scratch.mkdir(parents=True, exist_ok=True)
     for taut_idx, tautomer in species.tautomers.items():
         results[taut_idx] = run_tautomer_solvation(
@@ -871,6 +912,11 @@ def _build_cli_parser():
     p.add_argument("--charge", type=int, default=None, help="Override formal charge.")
     p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation")
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories.")
+    p.add_argument(
+        "--override-solvation",
+        action="store_true",
+        help="Override any existing species solvation folder results.",
+    )
     p.add_argument("--dry-run", action="store_true", help="Print nothing; just skip execution.")
     p.add_argument("--hess-charge-mode", type=str, default="negate", choices=["as_is", "negate"])
     return p

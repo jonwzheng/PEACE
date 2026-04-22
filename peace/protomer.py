@@ -135,7 +135,6 @@ class Tautomer:
         existing_smiles = [canon_smiles(p.smiles) for p in self.protomers.values()]
         if any([canon_smiles(protomer.smiles) == x for x in existing_smiles]):
             warnings.warn(f"Protomer {protomer.smiles} not added due to degeneracy.")
-            # TODO: include degeneracy for this species. May need to rewrite code, maybe 2 dicts?
         else:
             self.protomers[idx] = protomer
 

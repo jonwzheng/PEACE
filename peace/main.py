@@ -14,6 +14,7 @@ def _build_cli_parser():
         action="store_true",
         help="If set, run the solvation energy workflow for all generated protomers (requires xTB + g-xTB binaries).",
     )
+    p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
     p.add_argument("--scratch-root", type=str, default="./solvation_results", help="Scratch root for xTB runs.")
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories after each protomer run.")
     p.add_argument("--no-plot", action="store_true", help="Skip RDKit image rendering.")
@@ -25,12 +26,24 @@ def _build_cli_parser():
         help="Conformer geometry input for xTB runs.",
     )
     p.add_argument("--external-xyz", type=str, default=None, help="Path to external xyz (used only with conformer-mode=external_xyz).")
-    p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
+    p.add_argument(
+        "--override-solvation",
+        action="store_true",
+        help="Override any existing species solvation folder results.",
+    )
     p.add_argument(
         "--output-csv",
         type=str,
         default="results.csv",
         help="Path to save the final dataframe as CSV.",
+    )
+    p.add_argument(
+        "--opt-level",
+        type=str,
+        default="loose",
+        choices=["loose", "tight", "vtight"],
+        help="Optimization level for xTB runs.",
+
     )
     return p
 
@@ -64,7 +77,9 @@ if __name__ == "__main__":
             conformer_mode=args.conformer_mode,
             external_xyz_path=args.external_xyz,
             keep_scratch=bool(args.keep_scratch),
+            override_solvation=bool(args.override_solvation),
             dry_run=bool(args.dry_run),
+            opt_level=args.opt_level,
         )
     if not args.no_plot:
         imgs = spec.generate_protomer_plot(n_columns=5)
