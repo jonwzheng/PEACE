@@ -3,7 +3,7 @@ import shutil
 import shlex
 import subprocess
 import warnings
-import uuid
+
 from datetime import datetime
 
 from dataclasses import dataclass
@@ -285,8 +285,7 @@ def _create_scratch_context(scratch_root: str | Path, protomer_id: int | str) ->
     scratch_root_path.mkdir(parents=True, exist_ok=True)
     workflow_log = scratch_root_path / "peace.out"
 
-    unique_suffix = uuid.uuid4().hex[:8]
-    scratch_dir = scratch_root_path / f"protomer_{protomer_id}_{unique_suffix}"
+    scratch_dir = scratch_root_path / f"protomer_{protomer_id}"
     scratch_dir.mkdir(parents=True, exist_ok=False)
     run_log = scratch_dir / "run.out"
 

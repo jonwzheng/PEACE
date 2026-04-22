@@ -4,6 +4,7 @@ solvation_results/
 results.csv
 peace/solvation_results/
 peace/results.csv
+peace/results_archive/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
