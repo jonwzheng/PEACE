@@ -358,9 +358,6 @@ def _write_workflow_inputs(mol: Chem.Mol, scratch_dir: Path, charge: int, log_pa
     input_xyz_path = scratch_dir / "input.xyz"
     _write_xyz(mol, input_xyz_path, conf_id=0)
     _log_status(log_paths, "OK", f"wrote input geometry to {input_xyz_path.name}")
-
-    (scratch_dir / ".CHRG").write_text(str(charge))
-    _log_status(log_paths, "OK", f"wrote .CHRG with charge={charge}")
     return input_xyz_path
 
 
@@ -369,13 +366,15 @@ def _run_xtb_optimization(
     mol: Chem.Mol,
     scratch_dir: Path,
     input_xyz_path: Path,
-    xtb_executable: str,
-    opt_level: str,
+    gxtb_executable: str,
+    opt_level: Literal["loose", "tight", "vtight"],
+    charge: int,
     solvent: str,
     timeout_s: Optional[int],
     dry_run: bool,
+    keep_scratch: bool,
     log_paths: list[Path],
-) -> Path:
+) -> tuple[Path, Optional[float], Optional[float], Optional[float]]:
     xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
     xcontrol_path = scratch_dir / "xcontrol.inp"
     n_constraints = _build_fix_xcontrol(
@@ -396,13 +395,16 @@ def _run_xtb_optimization(
         _log_status(log_paths, "OK", "no ammonium-like N-H constraints generated")
 
     cmd_opt = (
-        f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
+        f"{shlex.quote(gxtb_executable)} {shlex.quote(input_xyz_path.name)} "
         f"{input_flag}"
-        f'--driver "gxtb -grad -c xtbdriver.xyz" '
-        f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)}"
+        f" --gxtb --ohess --charge {shlex.quote(str(charge))} --cosmo {shlex.quote(solvent)} --opt {shlex.quote(opt_level)}"
     )
     _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
     cp_opt = _run(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if keep_scratch and not dry_run:
+        xtbinfo_path = scratch_dir / "xtbinfo.log"
+        xtbinfo_path.write_text(cp_opt.stdout)
+        _log_status(log_paths, "OK", f"saved optimization stdout to {xtbinfo_path.name}")
     if cp_opt.returncode != 0:
         _log_status(
             log_paths,
@@ -419,7 +421,40 @@ def _run_xtb_optimization(
         raise FileNotFoundError("Expected output xtbopt.xyz was not produced by xTB.")
 
     _log_status(log_paths, "OK", f"optimization produced {xtbopt_xyz_path.name}")
-    return xtbopt_xyz_path
+
+    # Parse gas-phase and vibrational terms from this optimization run (--ohess).
+    opt_log_path = scratch_dir / "xtbopt.log"
+    parse_text = cp_opt.stdout
+    if opt_log_path.exists():
+        parse_text += "\n" + opt_log_path.read_text()
+
+    gas_sp_energy_h = _parse_xtb_total_energy_hartree(parse_text)
+    total_free_energy_h = _parse_xtb_total_free_energy_hartree(parse_text)
+    zpe_h = _parse_xtb_zpe_hartree(parse_text)
+    thermal_gibbs_h = _parse_xtb_thermal_gibbs_correction_hartree(parse_text)
+
+    gas_sp_energy_kcal_mol = None
+    if gas_sp_energy_h is not None:
+        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
+
+    freq_contrib_h: Optional[float] = None
+    if zpe_h is not None and thermal_gibbs_h is not None:
+        freq_contrib_h = zpe_h + thermal_gibbs_h
+    elif gas_sp_energy_h is not None and total_free_energy_h is not None:
+        freq_contrib_h = total_free_energy_h - gas_sp_energy_h
+
+    frequency_contribution_kcal_mol = None
+    if freq_contrib_h is not None:
+        frequency_contribution_kcal_mol = freq_contrib_h * HARTREE_TO_KCAL_MOL
+
+    _log_status(
+        log_paths,
+        "OK",
+        "parsed optimization energies "
+        f"gas_sp_energy_kcal_mol={gas_sp_energy_kcal_mol} "
+        f"frequency_contribution_kcal_mol={frequency_contribution_kcal_mol}",
+    )
+    return xtbopt_xyz_path, gas_sp_energy_kcal_mol, frequency_contribution_kcal_mol, gas_sp_energy_h
 
 
 def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_paths: list[Path]) -> Optional[str]:
@@ -436,16 +471,17 @@ def _run_cpcmx_single_point(
     *,
     scratch_dir: Path,
     xtbopt_xyz_path: Path,
-    xtb_executable: str,
+    cpcmx_executable: str,
     solvent: str,
     charge: int,
     gfn: int,
     timeout_s: Optional[int],
     dry_run: bool,
+    keep_scratch: bool,
     log_paths: list[Path],
 ) -> Optional[float]:
     cmd_sp = [
-        xtb_executable,
+        cpcmx_executable,
         str(xtbopt_xyz_path.name),
         "--cpcmx",
         solvent,
@@ -456,6 +492,10 @@ def _run_cpcmx_single_point(
     ]
     _log_status(log_paths, "STEP", f"running CPCM-X SP: {' '.join(shlex.quote(x) for x in cmd_sp)}")
     cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if keep_scratch and not dry_run:
+        cpcmxinfo_path = scratch_dir / "cpcmxinfo.log"
+        cpcmxinfo_path.write_text(cp_sp.stdout)
+        _log_status(log_paths, "OK", f"saved CPCM-X stdout to {cpcmxinfo_path.name}")
     if cp_sp.returncode != 0:
         _log_status(
             log_paths,
@@ -482,64 +522,6 @@ def _run_cpcmx_single_point(
         f"parsed solvation_free_energy_kcal_mol={solvation_free_energy_kcal_mol}",
     )
     return solvation_free_energy_kcal_mol
-
-
-def _run_hessian_and_parse_energies(
-    *,
-    scratch_dir: Path,
-    xtbopt_xyz_path: Path,
-    xtb_executable: str,
-    charge: int,
-    gfn: int,
-    timeout_s: Optional[int],
-    dry_run: bool,
-    log_paths: list[Path],
-) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    cmd_hess = [
-        xtb_executable,
-        str(xtbopt_xyz_path.name),
-        "--hess",
-        "--chrg",
-        str(charge),
-        "--gfn",
-        str(gfn),
-    ]
-    _log_status(log_paths, "STEP", f"running hessian: {' '.join(shlex.quote(x) for x in cmd_hess)}")
-    cp_hess = _run(cmd_hess, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
-    if cp_hess.returncode != 0:
-        _log_status(
-            log_paths,
-            "FAIL",
-            f"hessian failed returncode={cp_hess.returncode} stdout_tail={cp_hess.stdout[-1000:]} stderr_tail={cp_hess.stderr[-1000:]}",
-        )
-        raise RuntimeError(
-            f"xTB hess calculation failed with code {cp_hess.returncode}.\n"
-            f"stdout:\n{cp_hess.stdout[-4000:]}\n"
-            f"stderr:\n{cp_hess.stderr[-4000:]}\n"
-        )
-
-    gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_hess.stdout)
-    total_free_energy_h = _parse_xtb_total_free_energy_hartree(cp_hess.stdout)
-    zpe_h = _parse_xtb_zpe_hartree(cp_hess.stdout)
-    thermal_gibbs_h = _parse_xtb_thermal_gibbs_correction_hartree(cp_hess.stdout)
-
-    gas_sp_energy_kcal_mol = None
-
-    # TODO: double check final energy calculation
-    if gas_sp_energy_h is not None:
-        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
-
-    freq_contrib_h: Optional[float] = None
-    if zpe_h is not None and thermal_gibbs_h is not None:
-        freq_contrib_h = zpe_h + thermal_gibbs_h
-    elif gas_sp_energy_h is not None and total_free_energy_h is not None:
-        freq_contrib_h = total_free_energy_h - gas_sp_energy_h
-
-    frequency_contribution_kcal_mol = None
-    if freq_contrib_h is not None:
-        frequency_contribution_kcal_mol = freq_contrib_h * HARTREE_TO_KCAL_MOL
-
-    return gas_sp_energy_kcal_mol, frequency_contribution_kcal_mol, gas_sp_energy_h
 
 
 def _compute_solution_phase_energy(
@@ -650,7 +632,8 @@ def run_protomer_solvation(
     solvent: Literal["water"] = "water",
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
-    xtb_executable: str = "xtb",
+    gxtb_executable: str = "gxtb",
+    cpcmx_executable: str = "xtb",
     keep_scratch: bool = False,
     keep_scratch_on_failure: bool = False,
     dry_run: bool = False,
@@ -661,9 +644,8 @@ def run_protomer_solvation(
 
     Steps:
     1) Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
-    2) g-xTB optimization with implicit solvent (xTB + gxtb driver).
+    2) xTB g-xTB optimization using in COSMO phase with frequency calculation.
     3) CPCM-X SP solvation energy using GFN2-xTB.
-    4) Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
@@ -715,15 +697,17 @@ def run_protomer_solvation(
 
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
 
-        xtbopt_xyz_path = _run_xtb_optimization(
+        xtbopt_xyz_path, gas_sp_energy_kcal_mol, frequency_contribution_kcal_mol, gas_sp_energy_h = _run_xtb_optimization(
             mol=mol,
             scratch_dir=scratch_dir,
             input_xyz_path=input_xyz_path,
-            xtb_executable=xtb_executable,
+            gxtb_executable=gxtb_executable,
+            charge=charge,
             opt_level=opt_level,
             solvent=solvent,
             timeout_s=timeout_s,
             dry_run=dry_run,
+            keep_scratch=keep_scratch,
             log_paths=log_paths,
         )
 
@@ -731,23 +715,13 @@ def run_protomer_solvation(
         solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
             scratch_dir=scratch_dir,
             xtbopt_xyz_path=xtbopt_xyz_path,
-            xtb_executable=xtb_executable,
+            cpcmx_executable=cpcmx_executable,
             solvent=solvent,
             charge=charge,
             gfn=gfn,
             timeout_s=timeout_s,
             dry_run=dry_run,
-            log_paths=log_paths,
-        )
-
-        gas_sp_energy_kcal_mol, frequency_contribution_kcal_mol, gas_sp_energy_h = _run_hessian_and_parse_energies(
-            scratch_dir=scratch_dir,
-            xtbopt_xyz_path=xtbopt_xyz_path,
-            xtb_executable=xtb_executable,
-            charge=charge,
-            gfn=gfn,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
+            keep_scratch=keep_scratch,
             log_paths=log_paths,
         )
 
@@ -911,6 +885,8 @@ def _build_cli_parser():
     )
     p.add_argument("--charge", type=int, default=None, help="Override formal charge.")
     p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation")
+    p.add_argument("--gxtb-executable", type=str, default="gxtb", help="Executable used for optimization/ohess (--gxtb).")
+    p.add_argument("--cpcmx-executable", type=str, default="xtb", help="Executable used for CPCM-X single-point calculation.")
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories.")
     p.add_argument(
         "--override-solvation",
@@ -918,7 +894,6 @@ def _build_cli_parser():
         help="Override any existing species solvation folder results.",
     )
     p.add_argument("--dry-run", action="store_true", help="Print nothing; just skip execution.")
-    p.add_argument("--hess-charge-mode", type=str, default="negate", choices=["as_is", "negate"])
     return p
 
 
@@ -937,9 +912,10 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         conformer_mode=args.conformer_mode,
         external_xyz_path=args.external_xyz,
         charge_override=args.charge,
+        gxtb_executable=args.gxtb_executable,
+        cpcmx_executable=args.cpcmx_executable,
         keep_scratch=args.keep_scratch,
         dry_run=bool(args.dry_run),
-        hess_charge_mode=args.hess_charge_mode,
     )
 
     # Print a minimal summary of what got attached to the mol.
