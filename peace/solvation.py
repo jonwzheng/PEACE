@@ -73,6 +73,23 @@ def _parse_first_float(patterns: list[str], text: str) -> Optional[float]:
     return None
 
 
+def _parse_last_float(patterns: list[str], text: str) -> Optional[float]:
+    """
+    Parse the last matching float for each pattern (useful when logs contain
+    iterative/intermediate energies and a final summary value).
+    """
+    for pat in patterns:
+        matches = list(re.finditer(pat, text, flags=re.IGNORECASE | re.MULTILINE))
+        if not matches:
+            continue
+        for m in reversed(matches):
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
+
+
 def _set_mol_prop_str(mol: Chem.Mol, key: str, value: Optional[str]) -> None:
     if value is None:
         return
@@ -93,9 +110,9 @@ def _formal_charge(mol: Chem.Mol) -> int:
 def _embed_conformers_rdkit_mmff94(
     mol: Chem.Mol,
     *,
-    n_confs: int = 100,
-    random_seed: int = 0,
-    mmff_max_iters: int = 500,
+    n_confs: int = 500,
+    random_seed: int = 42,
+    mmff_max_iters: int = 1000,
 ) -> tuple[Chem.Mol, float, int]:
     """
     Generate conformers with RDKit ETKDG and optimize with MMFF94.
@@ -108,11 +125,11 @@ def _embed_conformers_rdkit_mmff94(
     mol_in = Chem.Mol(mol)
     mol_h = Chem.AddHs(mol_in, addCoords=False)
 
-    # Use RDKit's ETKDGv3 parameters for robust conformer generation.
+    # KDGv3 minus ET
     params = AllChem.ETKDGv3()
     params.randomSeed = int(random_seed)
     params.numThreads = 0
-    params.useExpTorsionAnglePrefs = False
+    params.useExpTorsionAnglePrefs = False # better for liquid phase
 
     # Use the (mol, numConfs, params) overload; kwargs not supported
     conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
@@ -212,7 +229,7 @@ def _parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
         rf"Total energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"total energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 def _parse_xtb_total_free_energy_hartree(text: str) -> Optional[float]:
@@ -222,19 +239,30 @@ def _parse_xtb_total_free_energy_hartree(text: str) -> Optional[float]:
         rf"Total free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"total free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 def _parse_xtb_solvent_free_energy_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
+    # Prefer the explicit dG_solv summary line:
+    #   solvation free energy (dG_solv):   -0.18544E-01   -11.63658
+    # Capture the first numeric value (Hartree) robustly.
+    dg_solv_line = re.search(
+        rf"solvation free energy\s*\(dG[_\s]*solv\)\s*:\s*({float_re})",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    if dg_solv_line:
+        try:
+            return float(dg_solv_line.group(1))
+        except ValueError:
+            pass
+
+    # fallbacks for older/variant output styles.
     patterns = [
-        # Common phrasing variants in xTB-like outputs.
+        rf"Delta\s*G[_\s]*solv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
+        rf"\bGsolv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"free energy of solvation[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Free energy of solvation[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"solvation free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"cpcm[xX][^\S\r\n]*.*free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Delta\s*G.*solv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Gsolv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
     return _parse_first_float(patterns, text)
 
@@ -246,18 +274,17 @@ def _parse_xtb_zpe_hartree(text: str) -> Optional[float]:
         rf"Zero point energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"ZPE[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 def _parse_xtb_thermal_gibbs_correction_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
-        rf"Thermal correction to Gibbs Free Energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Thermal correction to Gibbs free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"thermal correction to Gibbs free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Gibbs free energy[^\S\r\n]*correction[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
+        # xTB RRHO summary line, e.g.:
+        # :: G(RRHO) contrib.            0.047744476512 Eh   ::
+        rf"G\(RRHO\)[^\S\r\n]*contrib\.?[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 @dataclass(frozen=True)
@@ -358,9 +385,6 @@ def _write_workflow_inputs(mol: Chem.Mol, scratch_dir: Path, charge: int, log_pa
     input_xyz_path = scratch_dir / "input.xyz"
     _write_xyz(mol, input_xyz_path, conf_id=0)
     _log_status(log_paths, "OK", f"wrote input geometry to {input_xyz_path.name}")
-
-    (scratch_dir / ".CHRG").write_text(str(charge))
-    _log_status(log_paths, "OK", f"wrote .CHRG with charge={charge}")
     return input_xyz_path
 
 
@@ -527,6 +551,57 @@ def _run_cpcmx_single_point(
     return solvation_free_energy_kcal_mol
 
 
+def _run_gxtb_single_point_energy(
+    *,
+    scratch_dir: Path,
+    xtbopt_xyz_path: Path,
+    gxtb_executable: str,
+    timeout_s: Optional[int],
+    dry_run: bool,
+    log_paths: list[Path],
+) -> tuple[Optional[float], Optional[float]]:
+    """
+    Run a gas-phase g-xTB single-point energy on optimized geometry via xTB driver.
+    Returns (gas_sp_energy_kcal_mol, gas_sp_energy_hartree).
+    """
+    cmd_sp = (
+        f"{shlex.quote(gxtb_executable)} {shlex.quote(xtbopt_xyz_path.name)} "
+        f"--gxtb"
+    )
+    _log_status(log_paths, "STEP", f"running g-xTB gas-phase SP: {cmd_sp}")
+    cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if not dry_run:
+        gxtb_log_path = scratch_dir / "gxtbsp_run.log"
+        gxtb_log_path.write_text(cp_sp.stdout)
+        _log_status(log_paths, "OK", f"saved g-xTB SP stdout to {gxtb_log_path.name}")
+
+    if cp_sp.returncode != 0:
+        _log_status(
+            log_paths,
+            "FAIL",
+            f"g-xTB SP failed returncode={cp_sp.returncode} stdout_tail={cp_sp.stdout[-1000:]} stderr_tail={cp_sp.stderr[-1000:]}",
+        )
+        raise RuntimeError(
+            f"g-xTB gas-phase SP calculation failed with code {cp_sp.returncode}.\n"
+            f"stdout:\n{cp_sp.stdout[-4000:]}\n"
+            f"stderr:\n{cp_sp.stderr[-4000:]}\n"
+        )
+
+    gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_sp.stdout)
+    gas_sp_energy_kcal_mol = None
+    if gas_sp_energy_h is not None:
+        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
+    else:
+        warnings.warn(
+            "Could not parse TOTAL ENERGY from g-xTB SP output. "
+            "Gas-phase energy will remain None.",
+            RuntimeWarning,
+        )
+        _log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from g-xTB output")
+
+    return gas_sp_energy_kcal_mol, gas_sp_energy_h
+
+
 def _run_hessian_and_parse_energies(
     *,
     scratch_dir: Path,
@@ -572,7 +647,6 @@ def _run_hessian_and_parse_energies(
 
     gas_sp_energy_kcal_mol = None
 
-    # TODO: double check final energy calculation
     if gas_sp_energy_h is not None:
         gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
 
@@ -678,6 +752,7 @@ def _preserve_output_files(
         preserved_log_dir.mkdir(parents=True, exist_ok=True)
         log_files_to_preserve = [
             "xtbopt_run.log",
+            "gxtbsp_run.log",
             "xtbsolv_run.log",
             "xtbfreq_run.log",
         ]
@@ -718,8 +793,9 @@ def run_protomer_solvation(
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
-    opt_level: Literal["loose", "tight", "vtight"] = "loose",
+    opt_level: Literal["loose", "tight", "vtight"] = "tight",
     xtb_executable: str = "xtb",
+    gxtb_executable: str = "gxtb2",
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -730,10 +806,11 @@ def run_protomer_solvation(
     Solvates a protomer and gets the solution-phase energy
 
     Steps:
-    1) Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
-    2) g-xTB optimization with implicit solvent (xTB + optional gxtb driver [NOT IMPLEMENTED]).
-    3) CPCM-X SP solvation energy using GFN2-xTB.
-    4) Gas-phase frequency calculation using GFN2-xTB (--hess).
+    1. Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
+    2. xTB optimization with implicit solvent (xTB + optional gxtb driver [NOT IMPLEMENTED]).
+    3. g-xTB gas-phase SP energy calculation on optimized geometry.
+    4. CPCM-X SP solvation energy using GFN2-xTB.
+    5. Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
@@ -798,6 +875,15 @@ def run_protomer_solvation(
         )
 
         xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
+        gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_gxtb_single_point_energy(
+            scratch_dir=scratch_dir,
+            xtbopt_xyz_path=xtbopt_xyz_path,
+            gxtb_executable=gxtb_executable,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+        )
+
         solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
             scratch_dir=scratch_dir,
             xtbopt_xyz_path=xtbopt_xyz_path,
@@ -810,7 +896,7 @@ def run_protomer_solvation(
             log_paths=log_paths,
         )
 
-        gas_sp_energy_kcal_mol, frequency_contribution_kcal_mol, gas_sp_energy_h = _run_hessian_and_parse_energies(
+        _, frequency_contribution_kcal_mol, _ = _run_hessian_and_parse_energies(
             scratch_dir=scratch_dir,
             xtbopt_xyz_path=xtbopt_xyz_path,
             xtb_executable=xtb_executable,
@@ -981,6 +1067,12 @@ def _build_cli_parser():
     )
     p.add_argument("--charge", type=int, default=None, help="Override formal charge.")
     p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation")
+    p.add_argument(
+        "--gxtb-executable",
+        type=str,
+        default="gxtb2",
+        help="Executable used for g-xTB gas-phase SP energy calculation.",
+    )
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories.")
     p.add_argument(
         "--keep-logs",
@@ -1012,6 +1104,7 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         conformer_mode=args.conformer_mode,
         external_xyz_path=args.external_xyz,
         charge_override=args.charge,
+        gxtb_executable=args.gxtb_executable,
         keep_scratch=args.keep_scratch,
         keep_logs=args.keep_logs,
         dry_run=bool(args.dry_run),
