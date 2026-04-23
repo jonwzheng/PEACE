@@ -17,6 +17,11 @@ def _build_cli_parser():
     p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
     p.add_argument("--scratch-root", type=str, default="./solvation_results", help="Scratch root for xTB runs.")
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories after each protomer run.")
+    p.add_argument(
+        "--keep-logs",
+        action="store_true",
+        help="Preserve run stdout logs into a separate log folder after each run.",
+    )
     p.add_argument("--no-plot", action="store_true", help="Skip RDKit image rendering.")
     p.add_argument(
         "--conformer-mode",
@@ -77,6 +82,7 @@ if __name__ == "__main__":
             conformer_mode=args.conformer_mode,
             external_xyz_path=args.external_xyz,
             keep_scratch=bool(args.keep_scratch),
+            keep_logs=bool(args.keep_logs),
             override_solvation=bool(args.override_solvation),
             dry_run=bool(args.dry_run),
             opt_level=args.opt_level,

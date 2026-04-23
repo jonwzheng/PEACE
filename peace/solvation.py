@@ -263,7 +263,7 @@ def _parse_xtb_thermal_gibbs_correction_hartree(text: str) -> Optional[float]:
 @dataclass(frozen=True)
 class SolvationWorkflowResult:
     conformer_energy_kcal_mol: Optional[float]
-    gxtb_optimized_xyz: Optional[Path]
+    xtb_optimized_xyz: Optional[Path]
     solvation_free_energy_kcal_mol: Optional[float]
     gas_sp_energy_kcal_mol: Optional[float]
     frequency_contribution_kcal_mol: Optional[float]
@@ -397,12 +397,16 @@ def _run_xtb_optimization(
 
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
-        f"{input_flag}"
-        f'--driver "gxtb -grad -c xtbdriver.xyz" '
+        f"{input_flag} "
+#        f'--driver "gxtb -grad -c xtbdriver.xyz" '
         f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)}"
     )
     _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
     cp_opt = _run(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if not dry_run:
+        optimization_log_path = scratch_dir / "xtbopt_run.log"
+        optimization_log_path.write_text(cp_opt.stdout)
+        _log_status(log_paths, "OK", f"saved optimization stdout to {optimization_log_path.name}")
     if cp_opt.returncode != 0:
         _log_status(
             log_paths,
@@ -410,7 +414,7 @@ def _run_xtb_optimization(
             f"optimization failed returncode={cp_opt.returncode} stdout_tail={cp_opt.stdout[-1000:]} stderr_tail={cp_opt.stderr[-1000:]}",
         )
         raise RuntimeError(
-            f"xTB optimization (gxtb driver) failed with code {cp_opt.returncode}.\n"
+            f"xTB optimization failed with code {cp_opt.returncode}.\n"
             f"stdout:\n{cp_opt.stdout[-4000:]}\n"
             f"stderr:\n{cp_opt.stderr[-4000:]}\n"
         )
@@ -456,6 +460,10 @@ def _run_cpcmx_single_point(
     ]
     _log_status(log_paths, "STEP", f"running CPCM-X SP: {' '.join(shlex.quote(x) for x in cmd_sp)}")
     cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if not dry_run:
+        solvation_log_path = scratch_dir / "xtbsolv_run.log"
+        solvation_log_path.write_text(cp_sp.stdout)
+        _log_status(log_paths, "OK", f"saved CPCM-X stdout to {solvation_log_path.name}")
     if cp_sp.returncode != 0:
         _log_status(
             log_paths,
@@ -506,6 +514,10 @@ def _run_hessian_and_parse_energies(
     ]
     _log_status(log_paths, "STEP", f"running hessian: {' '.join(shlex.quote(x) for x in cmd_hess)}")
     cp_hess = _run(cmd_hess, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if not dry_run:
+        frequency_log_path = scratch_dir / "xtbfreq_run.log"
+        frequency_log_path.write_text(cp_hess.stdout)
+        _log_status(log_paths, "OK", f"saved frequency stdout to {frequency_log_path.name}")
     if cp_hess.returncode != 0:
         _log_status(
             log_paths,
@@ -600,6 +612,8 @@ def _persist_protomer_results(
 
 def _preserve_output_files(
     scratch_dir: Path,
+    *,
+    keep_logs: bool = False,
 ) -> Optional[Path]:
     if not scratch_dir.exists():
         return None
@@ -609,7 +623,11 @@ def _preserve_output_files(
     preserved_dir.mkdir(parents=True, exist_ok=True)
 
     preserved_xtbopt_path: Optional[Path] = None
-    files_to_preserve = ["input.xyz", "xtbopt.xyz", "xtbopt.log"]
+    files_to_preserve = [
+        "input.xyz",
+        "xtbopt.xyz",
+        "xtbopt.log"
+    ]
     for file_name in files_to_preserve:
         src = scratch_dir / file_name
         if not src.exists():
@@ -619,6 +637,22 @@ def _preserve_output_files(
         _log_status(log_paths, "KEEP", f"preserved {file_name} at {dst}")
         if file_name == "xtbopt.xyz":
             preserved_xtbopt_path = dst
+
+    if keep_logs:
+        preserved_log_dir = scratch_dir.parent / "log"
+        preserved_log_dir.mkdir(parents=True, exist_ok=True)
+        log_files_to_preserve = [
+            "xtbopt_run.log",
+            "xtbsolv_run.log",
+            "xtbfreq_run.log",
+        ]
+        for file_name in log_files_to_preserve:
+            src = scratch_dir / file_name
+            if not src.exists():
+                continue
+            dst = preserved_log_dir / f"{scratch_dir.name}_{file_name}"
+            shutil.copy2(src, dst)
+            _log_status(log_paths, "KEEP", f"preserved {file_name} at {dst}")
     return preserved_xtbopt_path
 
 
@@ -652,6 +686,7 @@ def run_protomer_solvation(
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     keep_scratch: bool = False,
+    keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
     dry_run: bool = False,
     timeout_s: Optional[int] = None,
@@ -661,7 +696,7 @@ def run_protomer_solvation(
 
     Steps:
     1) Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
-    2) g-xTB optimization with implicit solvent (xTB + gxtb driver).
+    2) g-xTB optimization with implicit solvent (xTB + optional gxtb driver [NOT IMPLEMENTED]).
     3) CPCM-X SP solvation energy using GFN2-xTB.
     4) Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
@@ -698,7 +733,7 @@ def run_protomer_solvation(
             protomer.mol.SetProp("peace_charge", str(charge))
             return SolvationWorkflowResult(
                 conformer_energy_kcal_mol=conformer_energy_kcal_mol,
-                gxtb_optimized_xyz=None,
+                xtb_optimized_xyz=None,
                 solvation_free_energy_kcal_mol=None,
                 gas_sp_energy_kcal_mol=None,
                 frequency_contribution_kcal_mol=None,
@@ -774,7 +809,7 @@ def run_protomer_solvation(
 
         stdout_tail = str(e)
 
-        preserved_xtbopt_path = _preserve_output_files(scratch_dir)
+        preserved_xtbopt_path = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
         keep = keep_scratch or keep_scratch_on_failure
         _cleanup_scratch_dir(
             scratch_dir,
@@ -786,7 +821,7 @@ def run_protomer_solvation(
 
         return SolvationWorkflowResult(
             conformer_energy_kcal_mol=conformer_energy_kcal_mol,
-            gxtb_optimized_xyz=preserved_xtbopt_path if preserved_xtbopt_path is not None else xtbopt_xyz_path,
+            xtb_optimized_xyz=preserved_xtbopt_path if preserved_xtbopt_path is not None else xtbopt_xyz_path,
             solvation_free_energy_kcal_mol=None,
             gas_sp_energy_kcal_mol=None,
             frequency_contribution_kcal_mol=None,
@@ -804,7 +839,7 @@ def run_protomer_solvation(
         solution_phase_free_energy_kcal_mol=solution_phase_free_energy_kcal_mol,
     )
 
-    final_xtbopt_path = _preserve_output_files(scratch_dir)
+    final_xtbopt_path = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
     _cleanup_scratch_dir(
         scratch_dir,
         keep_scratch=keep_scratch,
@@ -823,7 +858,7 @@ def run_protomer_solvation(
 
     return SolvationWorkflowResult(
         conformer_energy_kcal_mol=conformer_energy_kcal_mol,
-        gxtb_optimized_xyz=final_xtbopt_path if final_xtbopt_path is not None else xtbopt_xyz_path,
+        xtb_optimized_xyz=final_xtbopt_path if final_xtbopt_path is not None else xtbopt_xyz_path,
         solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
         gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
         frequency_contribution_kcal_mol=frequency_contribution_kcal_mol,
@@ -913,6 +948,11 @@ def _build_cli_parser():
     p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation")
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories.")
     p.add_argument(
+        "--keep-logs",
+        action="store_true",
+        help="Preserve run stdout logs into a separate log folder after each run.",
+    )
+    p.add_argument(
         "--override-solvation",
         action="store_true",
         help="Override any existing species solvation folder results.",
@@ -938,6 +978,7 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         external_xyz_path=args.external_xyz,
         charge_override=args.charge,
         keep_scratch=args.keep_scratch,
+        keep_logs=args.keep_logs,
         dry_run=bool(args.dry_run),
         hess_charge_mode=args.hess_charge_mode,
     )
