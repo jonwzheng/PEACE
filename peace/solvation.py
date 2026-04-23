@@ -131,7 +131,6 @@ def _embed_conformers_rdkit_mmff94(
     params.numThreads = 0
     params.useExpTorsionAnglePrefs = False # better for liquid phase
 
-    # Use the (mol, numConfs, params) overload; kwargs not supported
     conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
     if not conf_ids:
         raise RuntimeError("RDKit conformer embedding produced no conformers.")
@@ -139,8 +138,8 @@ def _embed_conformers_rdkit_mmff94(
     best_energy = float("inf")
     best_conf_id = conf_ids[0]
 
+    # optimize confs
     for conf_id in conf_ids:
-        # Optimize this conformer in-place using RDKit's built-in MMFF optimizer.
         status = AllChem.MMFFOptimizeMolecule(
             mol_h,
             mmffVariant="MMFF94",
@@ -422,8 +421,8 @@ def _run_xtb_optimization(
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
         f"{input_flag} "
-#        f'--driver "gxtb -grad -c xtbdriver.xyz" '
-        f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)}"
+        f'--driver "gxtb -grad -c xtbdriver.xyz" '
+        f"--opt {shlex.quote(opt_level)}"# --alpb {shlex.quote(solvent)}"
     )
     _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
     cp_opt = _run(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
@@ -793,7 +792,7 @@ def run_protomer_solvation(
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
-    opt_level: Literal["loose", "tight", "vtight"] = "tight",
+    opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     gxtb_executable: str = "gxtb2",
     keep_scratch: bool = False,
@@ -807,8 +806,8 @@ def run_protomer_solvation(
 
     Steps:
     1. Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
-    2. xTB optimization with implicit solvent (xTB + optional gxtb driver [NOT IMPLEMENTED]).
-    3. g-xTB gas-phase SP energy calculation on optimized geometry.
+    2. g-xTB optimization.
+    3. g-xTB gas-phase SP energy calculation on optimized geometry. # TODO: combine step 2 and 3
     4. CPCM-X SP solvation energy using GFN2-xTB.
     5. Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
