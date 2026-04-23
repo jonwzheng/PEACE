@@ -194,10 +194,10 @@ def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: f
         n_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
         for h_atom in h_neighbors:
             h_idx = h_atom.GetIdx() + 1
-            constraints.append(f" distance: {n_idx}, {h_idx}, {fixed_distance:.2f}")
+            constraints.append(f" distance: {n_idx},{h_idx},{fixed_distance:.2f}")
 
     if constraints:
-        content = "$fix\n" + "\n".join(constraints) + "\n$end\n"
+        content = "$constrain\n" + "\n".join(constraints) + "\n$end\n"
         xcontrol_path.write_text(content)
     elif xcontrol_path.exists():
         xcontrol_path.unlink()
