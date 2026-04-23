@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdDetermineBonds
 
 from .protomer import Protomer, Species, Tautomer
 
@@ -426,11 +426,46 @@ def _run_xtb_optimization(
     return xtbopt_xyz_path
 
 
+def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
+    """
+    Return all-atom connectivity as undirected atom-index pairs.
+    Used to check whether an opt. geom matches input geom.
+    """
+    edges: set[tuple[int, int]] = set()
+    if mol is None:
+        return edges
+    for bond in mol.GetBonds():
+        begin = bond.GetBeginAtom()
+        end = bond.GetEndAtom()
+        i, j = begin.GetIdx(), end.GetIdx()
+        edges.add((min(i, j), max(i, j)))
+    return edges
+
+
 def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_paths: list[Path]) -> Optional[str]:
-    # TODO: instead of making a mol from the xyz file,  assign the protomer mol's atom coordinates to the xyz coordinates of the mol_opt.
-    # this assumes the atom-mapping of the protomer mol and the mol_opt is the same, which it should be...
+    # build a bonded graph from optimized xyz coordinates for sanity checking.
     mol_opt = Chem.MolFromXYZFile(str(xyz_path))
     if mol_opt is not None and mol_opt.GetNumConformers() > 0:
+        rdDetermineBonds.DetermineConnectivity(mol_opt)
+
+        # sanity check: optimized connectivity should match input connectivity.
+        input_mol = protomer.input_mol if getattr(protomer, "input_mol", None) is not None else protomer.mol
+        # make a copy of the input mol that has explicit Hydrogens
+        input_mol_with_hydrogens = Chem.AddHs(input_mol)
+        
+        input_edges = _all_atom_connectivity_signature(input_mol_with_hydrogens)
+        opt_edges = _all_atom_connectivity_signature(mol_opt)
+        if input_edges != opt_edges:
+            warnings.warn(
+                f"Optimized structure connectivity differs from input mol!! Please double-check the optimized structure. Got: {opt_edges}, Expected: {input_edges}",
+                RuntimeWarning,
+            )
+            _log_status(
+                log_paths,
+                "WARN",
+                "optimized connectivity does not match input connectivity!!",
+            )
+
         protomer.mol = mol_opt
         _log_status(log_paths, "OK", f"updated protomer geometry from {xyz_path.name}")
         return xyz_path.read_text()
