@@ -87,6 +87,8 @@ if __name__ == "__main__":
             dry_run=bool(args.dry_run),
             opt_level=args.opt_level,
         )
+        spec.assign_boltzmann_microstate_populations(temperature_k=298.15)
+
     if not args.no_plot:
         imgs = spec.generate_protomer_plot(n_columns=5)
         show_images(imgs, mode="vertical")

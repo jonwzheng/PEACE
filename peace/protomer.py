@@ -153,7 +153,14 @@ class Tautomer:
         n_padding = n_rows * n_columns - len(mols)
         mols.extend([None]*n_padding)
 
-        legends = [f"ID: {k} | SMILES: {v.smiles}" for k, v in self.protomers.items()]
+        # show also the microstate populations if available
+        legends = []
+        for k, v in self.protomers.items():
+            if v.mol.HasProp('peace_boltzmann_fraction'):
+                f_i = f"f_i: {float(v.mol.GetProp('peace_boltzmann_fraction')):.4f}"
+            else:
+                f_i = ""
+            legends.append(f"ID: {k} | SMILES: {v.smiles}\n {f_i}")
         legends.extend([""]*n_padding)
 
         highlights = [protomer.ionization_sites for protomer in self.protomers.values()]
@@ -208,9 +215,66 @@ class Species:
             if smiles not in self.get_all_smiles():
                 tautomer = Tautomer.from_smiles(smiles)
                 self.embed_tautomer(tautomer)
-            else:
-                warnings.warn(f"Tautomer with SMILES {smiles} not added as already embedded in species.")
-        
+
+    def assign_boltzmann_microstate_populations(
+        self,
+        *,
+        temperature_k: float = 298.15,
+        energy_prop: str = "peace_solution_phase_free_energy_kcal_mol",
+    ) -> pd.DataFrame:
+        """
+        Compute and assign Boltzmann populations across all protomers in all tautomers.
+
+        Uses:
+            DGi = Gi - Gref
+            Q = sum_i exp(-DGi/RT)
+            fi = exp(-DGi/RT) / Q
+
+        Energies are read from `energy_prop` on each protomer mol.
+        The lowest-energy protomer across ALL tautomers is used as reference.
+        Assigned properties:
+            - peace_delta_g_kcal_mol
+            - peace_boltzmann_fraction
+        """
+        if temperature_k <= 0:
+            raise ValueError("temperature_k must be > 0.")
+
+        # kcal/mol/K
+        GAS_CONSTANT_KCAL = 0.00198720425864083
+        rt = GAS_CONSTANT_KCAL * float(temperature_k)
+
+        entries = []
+        for taut_idx, tautomer in self.tautomers.items():
+            for prot_idx, protomer in tautomer.protomers.items():
+                if protomer.mol is None or not protomer.mol.HasProp(energy_prop):
+                    continue
+                try:
+                    g_i = float(protomer.mol.GetProp(energy_prop))
+                except ValueError:
+                    warnings.warn(
+                        f"Could not parse {energy_prop} for tautomer_id={taut_idx}, protomer_id={prot_idx}."
+                    )
+                    continue
+                entries.append((taut_idx, prot_idx, protomer, g_i))
+
+        if len(entries) == 0:
+            warnings.warn(
+                f"No protomers found with property '{energy_prop}'. "
+                "Boltzmann populations were not assigned."
+            )
+
+        g_ref = min(g_i for _, _, _, g_i in entries)
+        reduced = [-(g_i - g_ref) / rt for _, _, _, g_i in entries]
+        weights = np.exp(np.array(reduced, dtype=float))
+        partition_q = float(np.sum(weights))
+
+        rows = []
+        for idx, (taut_idx, prot_idx, protomer, g_i) in enumerate(entries):
+            delta_g = g_i - g_ref
+            frac = float(weights[idx] / partition_q) if partition_q > 0 else 0.0
+            protomer.mol.SetDoubleProp("peace_delta_g_kcal_mol", float(delta_g))
+            protomer.mol.SetDoubleProp("peace_boltzmann_fraction", float(frac))
+
     def to_dataframe(self):
         rows = []
         solvation_props = [
@@ -219,6 +283,8 @@ class Species:
             "peace_gas_sp_energy_kcal_mol",
             "peace_frequency_contribution_kcal_mol",
             "peace_solution_phase_free_energy_kcal_mol",
+            "peace_delta_g_kcal_mol",
+            "peace_boltzmann_fraction",
         ]
         for taut_idx, tautomer in self.tautomers.items():
             for prot_idx, protomer in tautomer.protomers.items():
