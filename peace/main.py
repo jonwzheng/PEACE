@@ -16,12 +16,6 @@ def _build_cli_parser():
     )
     p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
     p.add_argument("--scratch-root", type=str, default="./solvation_results", help="Scratch root for xTB runs.")
-    p.add_argument(
-        "--gxtb-executable",
-        type=str,
-        default="gxtb2",
-        help="Executable used for g-xTB gas-phase SP energy calculation.",
-    )
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories after each protomer run.")
     p.add_argument(
         "--keep-logs",
@@ -87,7 +81,6 @@ if __name__ == "__main__":
             scratch_root=args.scratch_root,
             conformer_mode=args.conformer_mode,
             external_xyz_path=args.external_xyz,
-            gxtb_executable=args.gxtb_executable,
             keep_scratch=bool(args.keep_scratch),
             keep_logs=bool(args.keep_logs),
             override_solvation=bool(args.override_solvation),

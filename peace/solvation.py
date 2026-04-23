@@ -394,11 +394,11 @@ def _run_xtb_optimization(
     input_xyz_path: Path,
     xtb_executable: str,
     opt_level: str,
-    solvent: str,
+    charge: int,
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
-) -> Path:
+) -> tuple[Path, Optional[float], Optional[float]]:
     xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
     xcontrol_path = scratch_dir / "xcontrol.inp"
     n_constraints = _build_fix_xcontrol(
@@ -422,7 +422,7 @@ def _run_xtb_optimization(
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
         f"{input_flag} "
         f'--driver "gxtb -grad -c xtbdriver.xyz" '
-        f"--opt {shlex.quote(opt_level)}"# --alpb {shlex.quote(solvent)}"
+        f"--opt {shlex.quote(opt_level)} --charge {shlex.quote(str(charge))}"
     )
     _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
     cp_opt = _run(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
@@ -446,7 +446,26 @@ def _run_xtb_optimization(
         raise FileNotFoundError("Expected output xtbopt.xyz was not produced by xTB.")
 
     _log_status(log_paths, "OK", f"optimization produced {xtbopt_xyz_path.name}")
-    return xtbopt_xyz_path
+
+    # Parse gas-phase SP energy directly from optimization output/log.
+    parse_text = cp_opt.stdout
+    xtbopt_log_path = scratch_dir / "xtbopt.log"
+    if xtbopt_log_path.exists():
+        parse_text += "\n" + xtbopt_log_path.read_text()
+
+    gas_sp_energy_h = _parse_xtb_total_energy_hartree(parse_text)
+    gas_sp_energy_kcal_mol = None
+    if gas_sp_energy_h is not None:
+        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
+    else:
+        warnings.warn(
+            "Could not parse TOTAL ENERGY from optimization output/log. "
+            "Gas-phase energy will remain None.",
+            RuntimeWarning,
+        )
+        _log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from optimization output/log")
+
+    return xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h
 
 
 def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
@@ -548,57 +567,6 @@ def _run_cpcmx_single_point(
         f"parsed solvation_free_energy_kcal_mol={solvation_free_energy_kcal_mol}",
     )
     return solvation_free_energy_kcal_mol
-
-
-def _run_gxtb_single_point_energy(
-    *,
-    scratch_dir: Path,
-    xtbopt_xyz_path: Path,
-    gxtb_executable: str,
-    timeout_s: Optional[int],
-    dry_run: bool,
-    log_paths: list[Path],
-) -> tuple[Optional[float], Optional[float]]:
-    """
-    Run a gas-phase g-xTB single-point energy on optimized geometry via xTB driver.
-    Returns (gas_sp_energy_kcal_mol, gas_sp_energy_hartree).
-    """
-    cmd_sp = (
-        f"{shlex.quote(gxtb_executable)} {shlex.quote(xtbopt_xyz_path.name)} "
-        f"--gxtb"
-    )
-    _log_status(log_paths, "STEP", f"running g-xTB gas-phase SP: {cmd_sp}")
-    cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
-    if not dry_run:
-        gxtb_log_path = scratch_dir / "gxtbsp_run.log"
-        gxtb_log_path.write_text(cp_sp.stdout)
-        _log_status(log_paths, "OK", f"saved g-xTB SP stdout to {gxtb_log_path.name}")
-
-    if cp_sp.returncode != 0:
-        _log_status(
-            log_paths,
-            "FAIL",
-            f"g-xTB SP failed returncode={cp_sp.returncode} stdout_tail={cp_sp.stdout[-1000:]} stderr_tail={cp_sp.stderr[-1000:]}",
-        )
-        raise RuntimeError(
-            f"g-xTB gas-phase SP calculation failed with code {cp_sp.returncode}.\n"
-            f"stdout:\n{cp_sp.stdout[-4000:]}\n"
-            f"stderr:\n{cp_sp.stderr[-4000:]}\n"
-        )
-
-    gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_sp.stdout)
-    gas_sp_energy_kcal_mol = None
-    if gas_sp_energy_h is not None:
-        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
-    else:
-        warnings.warn(
-            "Could not parse TOTAL ENERGY from g-xTB SP output. "
-            "Gas-phase energy will remain None.",
-            RuntimeWarning,
-        )
-        _log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from g-xTB output")
-
-    return gas_sp_energy_kcal_mol, gas_sp_energy_h
 
 
 def _run_hessian_and_parse_energies(
@@ -751,7 +719,6 @@ def _preserve_output_files(
         preserved_log_dir.mkdir(parents=True, exist_ok=True)
         log_files_to_preserve = [
             "xtbopt_run.log",
-            "gxtbsp_run.log",
             "xtbsolv_run.log",
             "xtbfreq_run.log",
         ]
@@ -794,7 +761,6 @@ def run_protomer_solvation(
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
-    gxtb_executable: str = "gxtb2",
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -806,10 +772,9 @@ def run_protomer_solvation(
 
     Steps:
     1. Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
-    2. g-xTB optimization.
-    3. g-xTB gas-phase SP energy calculation on optimized geometry. # TODO: combine step 2 and 3
-    4. CPCM-X SP solvation energy using GFN2-xTB.
-    5. Gas-phase frequency calculation using GFN2-xTB (--hess).
+    2. xTB optimization with g-xTB driver.
+    3. CPCM-X SP solvation energy using GFN2-xTB.
+    4. Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
@@ -861,27 +826,19 @@ def run_protomer_solvation(
 
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
 
-        xtbopt_xyz_path = _run_xtb_optimization(
+        xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_xtb_optimization(
             mol=mol,
             scratch_dir=scratch_dir,
             input_xyz_path=input_xyz_path,
             xtb_executable=xtb_executable,
+            charge=charge,
             opt_level=opt_level,
-            solvent=solvent,
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
         )
 
         xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
-        gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_gxtb_single_point_energy(
-            scratch_dir=scratch_dir,
-            xtbopt_xyz_path=xtbopt_xyz_path,
-            gxtb_executable=gxtb_executable,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-        )
 
         solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
             scratch_dir=scratch_dir,
@@ -1067,10 +1024,10 @@ def _build_cli_parser():
     p.add_argument("--charge", type=int, default=None, help="Override formal charge.")
     p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation")
     p.add_argument(
-        "--gxtb-executable",
+        "--xtb-executable",
         type=str,
-        default="gxtb2",
-        help="Executable used for g-xTB gas-phase SP energy calculation.",
+        default="xtb",
+        help="xTB executable used for optimization (with g-xTB driver), CPCM-X, and Hessian.",
     )
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories.")
     p.add_argument(
@@ -1103,7 +1060,7 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         conformer_mode=args.conformer_mode,
         external_xyz_path=args.external_xyz,
         charge_override=args.charge,
-        gxtb_executable=args.gxtb_executable,
+        xtb_executable=args.gxtb_executable,
         keep_scratch=args.keep_scratch,
         keep_logs=args.keep_logs,
         dry_run=bool(args.dry_run),
