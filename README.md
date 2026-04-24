@@ -9,7 +9,7 @@ More details forthcoming.
 ## Getting started
 Simply clone this repo and add this base directory to PATH, or run calculations directly from here.
 
-For the estimation of individual protomer populations, the user needs to install CREST, xTB, and g-xTB with the respective binary or execution script added to path.
+For the estimation of individual protomer populations, the user needs to install CREST, xTB, and [OPTIONAL; NOT IMPLEMENTED YET] g-xTB with the respective binary or execution script added to path. (g-xTB awaiting implicit solvation additions)
 
 ## How it works:
 

@@ -89,6 +89,23 @@ def _parse_last_float(patterns: list[str], text: str) -> Optional[float]:
     return None
 
 
+def _parse_last_float(patterns: list[str], text: str) -> Optional[float]:
+    """
+    Parse the last matching float for each pattern (useful when logs contain
+    iterative/intermediate energies and a final summary value).
+    """
+    for pat in patterns:
+        matches = list(re.finditer(pat, text, flags=re.IGNORECASE | re.MULTILINE))
+        if not matches:
+            continue
+        for m in reversed(matches):
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
+
+
 def _set_mol_prop_str(mol: Chem.Mol, key: str, value: Optional[str]) -> None:
     if value is None:
         return
@@ -109,9 +126,9 @@ def _formal_charge(mol: Chem.Mol) -> int:
 def _embed_conformers_rdkit_mmff94(
     mol: Chem.Mol,
     *,
-    n_confs: int = 100,
-    random_seed: int = 0,
-    mmff_max_iters: int = 500,
+    n_confs: int = 500,
+    random_seed: int = 42,
+    mmff_max_iters: int = 1000,
 ) -> tuple[Chem.Mol, float, int]:
     """
     Generate conformers with RDKit ETKDG and optimize with MMFF94.
@@ -124,13 +141,12 @@ def _embed_conformers_rdkit_mmff94(
     mol_in = Chem.Mol(mol)
     mol_h = Chem.AddHs(mol_in, addCoords=False)
 
-    # Use RDKit's ETKDGv3 parameters for robust conformer generation.
+    # KDGv3 minus ET
     params = AllChem.ETKDGv3()
     params.randomSeed = int(random_seed)
     params.numThreads = 0
-    params.useExpTorsionAnglePrefs = False
+    params.useExpTorsionAnglePrefs = False # better for liquid phase
 
-    # Use the (mol, numConfs, params) overload; kwargs not supported
     conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
     if not conf_ids:
         raise RuntimeError("RDKit conformer embedding produced no conformers.")
@@ -138,8 +154,8 @@ def _embed_conformers_rdkit_mmff94(
     best_energy = float("inf")
     best_conf_id = conf_ids[0]
 
+    # optimize confs
     for conf_id in conf_ids:
-        # Optimize this conformer in-place using RDKit's built-in MMFF optimizer.
         status = AllChem.MMFFOptimizeMolecule(
             mol_h,
             mmffVariant="MMFF94",
@@ -210,7 +226,7 @@ def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: f
         n_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
         for h_atom in h_neighbors:
             h_idx = h_atom.GetIdx() + 1
-            constraints.append(f" distance: {n_idx}, {h_idx}, {fixed_distance:.2f}")
+            constraints.append(f" distance: {n_idx},{h_idx},{fixed_distance:.2f}")
 
     if constraints:
         content = "$constrain\n" + "\n".join(constraints) + "\n$end\n"
@@ -271,10 +287,9 @@ def _parse_xtb_zpe_hartree(text: str) -> Optional[float]:
 def _parse_xtb_thermal_gibbs_correction_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
-        rf"Thermal correction to Gibbs Free Energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Thermal correction to Gibbs free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"thermal correction to Gibbs free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Gibbs free energy[^\S\r\n]*correction[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
+        # xTB RRHO summary line, e.g.:
+        # :: G(RRHO) contrib.            0.047744476512 Eh   ::
+        rf"G\(RRHO\)[^\S\r\n]*contrib\.?[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
     return _parse_last_float(patterns, text)
 
@@ -377,9 +392,6 @@ def _write_workflow_inputs(mol: Chem.Mol, scratch_dir: Path, charge: int, log_pa
     input_xyz_path = scratch_dir / "input.xyz"
     _write_xyz(mol, input_xyz_path, conf_id=0)
     _log_status(log_paths, "OK", f"wrote input geometry to {input_xyz_path.name}")
-
-    (scratch_dir / ".CHRG").write_text(str(charge))
-    _log_status(log_paths, "OK", f"wrote .CHRG with charge={charge}")
     return input_xyz_path
 
 
@@ -390,11 +402,11 @@ def _run_xtb_optimization(
     input_xyz_path: Path,
     xtb_executable: str,
     opt_level: str,
-    solvent: str,
+    charge: int,
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
-) -> Path:
+) -> tuple[Path, Optional[float], Optional[float]]:
     xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
     xcontrol_path = scratch_dir / "xcontrol.inp"
     n_constraints = _build_fix_xcontrol(
@@ -441,7 +453,42 @@ def _run_xtb_optimization(
         raise FileNotFoundError("Expected output xtbopt.xyz was not produced by xTB.")
 
     _log_status(log_paths, "OK", f"optimization produced {xtbopt_xyz_path.name}")
-    return xtbopt_xyz_path
+
+    # Parse gas-phase SP energy directly from optimization output/log.
+    parse_text = cp_opt.stdout
+    xtbopt_log_path = scratch_dir / "xtbopt.log"
+    if xtbopt_log_path.exists():
+        parse_text += "\n" + xtbopt_log_path.read_text()
+
+    gas_sp_energy_h = _parse_xtb_total_energy_hartree(parse_text)
+    gas_sp_energy_kcal_mol = None
+    if gas_sp_energy_h is not None:
+        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
+    else:
+        warnings.warn(
+            "Could not parse TOTAL ENERGY from optimization output/log. "
+            "Gas-phase energy will remain None.",
+            RuntimeWarning,
+        )
+        _log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from optimization output/log")
+
+    return xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h
+
+
+def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
+    """
+    Return all-atom connectivity as undirected atom-index pairs.
+    Used to check whether an opt. geom matches input geom.
+    """
+    edges: set[tuple[int, int]] = set()
+    if mol is None:
+        return edges
+    for bond in mol.GetBonds():
+        begin = bond.GetBeginAtom()
+        end = bond.GetEndAtom()
+        i, j = begin.GetIdx(), end.GetIdx()
+        edges.add((min(i, j), max(i, j)))
+    return edges
 
 
 def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
@@ -637,7 +684,6 @@ def _run_hessian_and_parse_energies(
 
     gas_sp_energy_kcal_mol = None
 
-    # TODO: double check final energy calculation
     if gas_sp_energy_h is not None:
         gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
 
@@ -854,19 +900,20 @@ def run_protomer_solvation(
 
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
 
-        xtbopt_xyz_path = _run_xtb_optimization(
+        xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_xtb_optimization(
             mol=mol,
             scratch_dir=scratch_dir,
             input_xyz_path=input_xyz_path,
             xtb_executable=xtb_executable,
+            charge=charge,
             opt_level=opt_level,
-            solvent=solvent,
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
         )
 
         xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
+
         solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
             scratch_dir=scratch_dir,
             xtbopt_xyz_path=xtbopt_xyz_path,
@@ -928,7 +975,7 @@ def run_protomer_solvation(
 
         stdout_tail = str(e)
 
-        preserved_xtbopt_path = _preserve_output_files(scratch_dir)
+        preserved_xtbopt_path = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
         keep = keep_scratch or keep_scratch_on_failure
         _cleanup_scratch_dir(
             scratch_dir,
@@ -958,7 +1005,7 @@ def run_protomer_solvation(
         solution_phase_free_energy_kcal_mol=solution_phase_free_energy_kcal_mol,
     )
 
-    final_xtbopt_path = _preserve_output_files(scratch_dir)
+    final_xtbopt_path = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
     _cleanup_scratch_dir(
         scratch_dir,
         keep_scratch=keep_scratch,
@@ -1065,7 +1112,18 @@ def _build_cli_parser():
     )
     p.add_argument("--charge", type=int, default=None, help="Override formal charge.")
     p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation")
+    p.add_argument(
+        "--xtb-executable",
+        type=str,
+        default="xtb",
+        help="xTB executable used for optimization (with g-xTB driver), CPCM-X, and Hessian.",
+    )
     p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories.")
+    p.add_argument(
+        "--keep-logs",
+        action="store_true",
+        help="Preserve run stdout logs into a separate log folder after each run.",
+    )
     p.add_argument(
         "--override-solvation",
         action="store_true",
