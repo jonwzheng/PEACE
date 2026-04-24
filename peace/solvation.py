@@ -534,6 +534,54 @@ def _run_cpcmx_single_point(
     return solvation_free_energy_kcal_mol
 
 
+def _run_gxtb_single_point_energy(
+    *,
+    scratch_dir: Path,
+    xtbopt_xyz_path: Path,
+    xtb_executable: str,
+    charge: int,
+    timeout_s: Optional[int],
+    dry_run: bool,
+    log_paths: list[Path],
+) -> tuple[Optional[float], Optional[float]]:
+    cmd_sp = (
+        f"{shlex.quote(xtb_executable)} {shlex.quote(xtbopt_xyz_path.name)} "
+        f'--driver "gxtb -grad -c xtbdriver.xyz" '
+        f"--chrg {shlex.quote(str(charge))}"
+    )
+    _log_status(log_paths, "STEP", f"running g-xTB gas-phase SP via driver: {cmd_sp}")
+    cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if not dry_run:
+        gxtbsp_log_path = scratch_dir / "gxtbsp_run.log"
+        gxtbsp_log_path.write_text(cp_sp.stdout)
+        _log_status(log_paths, "OK", f"saved g-xTB SP stdout to {gxtbsp_log_path.name}")
+    if cp_sp.returncode != 0:
+        _log_status(
+            log_paths,
+            "FAIL",
+            f"g-xTB SP failed returncode={cp_sp.returncode} stdout_tail={cp_sp.stdout[-1000:]} stderr_tail={cp_sp.stderr[-1000:]}",
+        )
+        raise RuntimeError(
+            f"g-xTB gas-phase SP calculation failed with code {cp_sp.returncode}.\n"
+            f"stdout:\n{cp_sp.stdout[-4000:]}\n"
+            f"stderr:\n{cp_sp.stderr[-4000:]}\n"
+        )
+
+    gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_sp.stdout)
+    gas_sp_energy_kcal_mol = None
+    if gas_sp_energy_h is not None:
+        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
+    else:
+        warnings.warn(
+            "Could not parse TOTAL ENERGY from g-xTB SP output. "
+            "Gas-phase energy will remain None.",
+            RuntimeWarning,
+        )
+        _log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from g-xTB SP output")
+
+    return gas_sp_energy_kcal_mol, gas_sp_energy_h
+
+
 def _run_hessian_and_parse_energies(
     *,
     scratch_dir: Path,
@@ -684,6 +732,7 @@ def _preserve_output_files(
         preserved_log_dir.mkdir(parents=True, exist_ok=True)
         log_files_to_preserve = [
             "xtbopt_run.log",
+            "gxtbsp_run.log",
             "xtbsolv_run.log",
             "xtbfreq_run.log",
         ]
@@ -727,6 +776,7 @@ def run_protomer_solvation(
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
+    use_gxtb_single_point_energy: bool = True,
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -740,7 +790,8 @@ def run_protomer_solvation(
     1) Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
     2) xTB optimization with implicit solvent. (g-xTB not supported yet!)
     3) CPCM-X SP solvation energy using GFN2-xTB.
-    4) Gas-phase frequency calculation using GFN2-xTB (--hess).
+    4) Gas-phase SP from g-xTB driver (default) or Hessian output fallback.
+    5) Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
@@ -817,7 +868,7 @@ def run_protomer_solvation(
             log_paths=log_paths,
         )
 
-        gas_sp_energy_kcal_mol, frequency_contribution_kcal_mol, gas_sp_energy_h = _run_hessian_and_parse_energies(
+        gas_sp_hess_kcal_mol, frequency_contribution_kcal_mol, gas_sp_hess_h = _run_hessian_and_parse_energies(
             scratch_dir=scratch_dir,
             xtbopt_xyz_path=xtbopt_xyz_path,
             xtb_executable=xtb_executable,
@@ -827,6 +878,18 @@ def run_protomer_solvation(
             dry_run=dry_run,
             log_paths=log_paths,
         )
+        if use_gxtb_single_point_energy:
+            gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_gxtb_single_point_energy(
+                scratch_dir=scratch_dir,
+                xtbopt_xyz_path=xtbopt_xyz_path,
+                xtb_executable=xtb_executable,
+                charge=charge,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+            )
+        else:
+            gas_sp_energy_kcal_mol, gas_sp_energy_h = gas_sp_hess_kcal_mol, gas_sp_hess_h
 
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
             gas_sp_energy_h,
@@ -995,6 +1058,12 @@ def _build_cli_parser():
         help="Override any existing species solvation folder results.",
     )
     p.add_argument("--dry-run", action="store_true", help="Print nothing; just skip execution.")
+    p.add_argument(
+        "--no-gxtb-sp-energy",
+        action="store_false",
+        dest="use_gxtb_single_point_energy",
+        help="Disable separate g-xTB-driver SP and use Hessian-derived gas SP instead.",
+    )
     p.add_argument("--hess-charge-mode", type=str, default="negate", choices=["as_is", "negate"])
     return p
 
@@ -1014,6 +1083,7 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         conformer_mode=args.conformer_mode,
         external_xyz_path=args.external_xyz,
         charge_override=args.charge,
+        use_gxtb_single_point_energy=args.use_gxtb_single_point_energy,
         keep_scratch=args.keep_scratch,
         keep_logs=args.keep_logs,
         dry_run=bool(args.dry_run),
