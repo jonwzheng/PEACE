@@ -248,8 +248,6 @@ def _parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
 def _parse_xtb_total_free_energy_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
-        rf"TOTAL FREE ENERGY[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Total free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"total free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
     return _parse_last_float(patterns, text)
@@ -402,7 +400,7 @@ def _run_xtb_optimization(
     input_xyz_path: Path,
     xtb_executable: str,
     opt_level: str,
-    charge: int,
+    solvent: str,
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
@@ -905,7 +903,7 @@ def run_protomer_solvation(
             scratch_dir=scratch_dir,
             input_xyz_path=input_xyz_path,
             xtb_executable=xtb_executable,
-            charge=charge,
+            solvent=solvent,
             opt_level=opt_level,
             timeout_s=timeout_s,
             dry_run=dry_run,
