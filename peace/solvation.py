@@ -239,13 +239,22 @@ def _parse_xtb_total_free_energy_hartree(text: str) -> Optional[float]:
     return _parse_last_float(patterns, text)
 
 
-def _parse_xtb_solvent_free_energy_hartree(text: str) -> Optional[float]:
+def _parse_xtb_solvent_free_energy_hartree(
+    text: str,
+    *,
+    mode: Literal["g", "e"] = "g",
+) -> Optional[float]:
     float_re = _float_regex()
-    patterns = [
-        # Common phrasing variants in xTB-like outputs.
-        rf"solvation free energy \(dG_solv\):[\ \t]*({float_re})",
-#        rf"Gsolv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})", This isn't DGsolv actually but gives way better results!!!
-    ]
+    if mode == "g":
+        patterns = [
+            rf"solvation free energy \(dG_solv\):[\ \t]*({float_re})",
+        ]
+    elif mode == "e":
+        patterns = [
+            rf"Gsolv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
+        ]
+    else:
+        raise ValueError(f"Unknown solvation parse mode: {mode}")
     return _parse_last_float(patterns, text)
 
 
@@ -486,6 +495,7 @@ def _run_cpcmx_single_point(
     solvent: str,
     charge: int,
     gfn: int,
+    parse_solvation: Literal["g", "e"],
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
@@ -518,7 +528,7 @@ def _run_cpcmx_single_point(
             f"stderr:\n{cp_sp.stderr[-4000:]}\n"
         )
 
-    solvation_free_energy_h = _parse_xtb_solvent_free_energy_hartree(cp_sp.stdout)
+    solvation_free_energy_h = _parse_xtb_solvent_free_energy_hartree(cp_sp.stdout, mode=parse_solvation)
     if solvation_free_energy_h is None:
         solvation_free_energy_h = _parse_xtb_total_free_energy_hartree(cp_sp.stdout)
 
@@ -774,6 +784,7 @@ def run_protomer_solvation(
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
+    parse_solvation: Literal["g", "e"] = "g",
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     use_gxtb_single_point_energy: bool = True,
@@ -863,6 +874,7 @@ def run_protomer_solvation(
             solvent=solvent,
             charge=charge,
             gfn=gfn,
+            parse_solvation=parse_solvation,
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
@@ -1059,6 +1071,13 @@ def _build_cli_parser():
     )
     p.add_argument("--dry-run", action="store_true", help="Print nothing; just skip execution.")
     p.add_argument(
+        "--parse-solvation",
+        type=str,
+        default="g",
+        choices=["g", "e"],
+        help="Solvation energy parser mode: 'g' for dG_solv (default), 'e' for Gsolv.",
+    )
+    p.add_argument(
         "--no-gxtb-sp-energy",
         action="store_false",
         dest="use_gxtb_single_point_energy",
@@ -1083,6 +1102,7 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         conformer_mode=args.conformer_mode,
         external_xyz_path=args.external_xyz,
         charge_override=args.charge,
+        parse_solvation=args.parse_solvation,
         use_gxtb_single_point_energy=args.use_gxtb_single_point_energy,
         keep_scratch=args.keep_scratch,
         keep_logs=args.keep_logs,

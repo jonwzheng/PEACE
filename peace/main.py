@@ -50,6 +50,13 @@ def _build_cli_parser():
         help="Optimization level for xTB runs.",
 
     )
+    p.add_argument(
+        "--parse-solvation",
+        type=str,
+        default="g",
+        choices=["g", "e"],
+        help="Solvation energy parser mode: 'g' for dG_solv (default), 'e' for Gsolv.",
+    )
     return p
 
 
@@ -83,6 +90,7 @@ if __name__ == "__main__":
             external_xyz_path=args.external_xyz,
             keep_scratch=bool(args.keep_scratch),
             keep_logs=bool(args.keep_logs),
+            parse_solvation=args.parse_solvation,
             override_solvation=bool(args.override_solvation),
             dry_run=bool(args.dry_run),
             opt_level=args.opt_level,
