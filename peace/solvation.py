@@ -243,8 +243,8 @@ def _parse_xtb_solvent_free_energy_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
         # Common phrasing variants in xTB-like outputs.
-        # matches:      solvation free energy (dG_solv):             -0.58382E-01   -36.63543
         rf"solvation free energy \(dG_solv\):[\ \t]*({float_re})",
+#        rf"Gsolv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})", This isn't DGsolv actually but gives way better results!!!
     ]
     return _parse_last_float(patterns, text)
 
