@@ -787,7 +787,7 @@ def run_protomer_solvation(
     parse_solvation: Literal["g", "e"] = "g",
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
-    use_gxtb_single_point_energy: bool = True,
+    sp_energy: Literal["gxtb", "xtb"] = "gxtb",
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -801,7 +801,7 @@ def run_protomer_solvation(
     1) Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
     2) xTB optimization with implicit solvent. (g-xTB not supported yet!)
     3) CPCM-X SP solvation energy using GFN2-xTB.
-    4) Gas-phase SP from g-xTB driver (default) or Hessian output fallback.
+    4) Gas-phase SP from g-xTB driver (default) or xTB Hessian output.
     5) Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
@@ -890,7 +890,7 @@ def run_protomer_solvation(
             dry_run=dry_run,
             log_paths=log_paths,
         )
-        if use_gxtb_single_point_energy:
+        if sp_energy == "gxtb":
             gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_gxtb_single_point_energy(
                 scratch_dir=scratch_dir,
                 xtbopt_xyz_path=xtbopt_xyz_path,
@@ -900,8 +900,10 @@ def run_protomer_solvation(
                 dry_run=dry_run,
                 log_paths=log_paths,
             )
-        else:
+        elif sp_energy == "xtb":
             gas_sp_energy_kcal_mol, gas_sp_energy_h = gas_sp_hess_kcal_mol, gas_sp_hess_h
+        else:
+            raise ValueError(f"Unknown sp_energy mode: {sp_energy}")
 
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
             gas_sp_energy_h,
@@ -1078,10 +1080,11 @@ def _build_cli_parser():
         help="Solvation energy parser mode: 'g' for dG_solv (default), 'e' for Gsolv.",
     )
     p.add_argument(
-        "--no-gxtb-sp-energy",
-        action="store_false",
-        dest="use_gxtb_single_point_energy",
-        help="Disable separate g-xTB-driver SP and use Hessian-derived gas SP instead.",
+        "--sp-energy",
+        type=str,
+        default="gxtb",
+        choices=["gxtb", "xtb"],
+        help="Gas-phase SP source: 'gxtb' (driver SP, default) or 'xtb' (from Hessian output).",
     )
     p.add_argument("--hess-charge-mode", type=str, default="negate", choices=["as_is", "negate"])
     return p
@@ -1103,7 +1106,7 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         external_xyz_path=args.external_xyz,
         charge_override=args.charge,
         parse_solvation=args.parse_solvation,
-        use_gxtb_single_point_energy=args.use_gxtb_single_point_energy,
+        sp_energy=args.sp_energy,
         keep_scratch=args.keep_scratch,
         keep_logs=args.keep_logs,
         dry_run=bool(args.dry_run),

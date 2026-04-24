@@ -57,6 +57,13 @@ def _build_cli_parser():
         choices=["g", "e"],
         help="Solvation energy parser mode: 'g' for dG_solv (default), 'e' for Gsolv.",
     )
+    p.add_argument(
+        "--sp-energy",
+        type=str,
+        default="gxtb",
+        choices=["gxtb", "xtb"],
+        help="Gas-phase SP source: 'gxtb' (driver SP, default) or 'xtb' (from Hessian output).",
+    )
     return p
 
 
@@ -91,6 +98,7 @@ if __name__ == "__main__":
             keep_scratch=bool(args.keep_scratch),
             keep_logs=bool(args.keep_logs),
             parse_solvation=args.parse_solvation,
+            sp_energy=args.sp_energy,
             override_solvation=bool(args.override_solvation),
             dry_run=bool(args.dry_run),
             opt_level=args.opt_level,
