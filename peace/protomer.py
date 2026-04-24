@@ -274,7 +274,7 @@ class Species:
             frac = float(weights[idx] / partition_q) if partition_q > 0 else 0.0
             protomer.mol.SetDoubleProp("peace_delta_g_kcal_mol", float(delta_g))
             protomer.mol.SetDoubleProp("peace_boltzmann_fraction", float(frac))
-
+        
     def to_dataframe(self):
         rows = []
         solvation_props = [

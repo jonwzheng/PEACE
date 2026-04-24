@@ -50,6 +50,20 @@ def _build_cli_parser():
         help="Optimization level for xTB runs.",
 
     )
+    p.add_argument(
+        "--parse-solvation",
+        type=str,
+        default="g",
+        choices=["g", "e"],
+        help="Solvation energy parser mode: 'g' for dG_solv (default), 'e' for Gsolv.",
+    )
+    p.add_argument(
+        "--sp-energy",
+        type=str,
+        default="gxtb",
+        choices=["gxtb", "xtb"],
+        help="Gas-phase SP source: 'gxtb' (driver SP, default) or 'xtb' (from Hessian output).",
+    )
     return p
 
 
@@ -83,12 +97,13 @@ if __name__ == "__main__":
             external_xyz_path=args.external_xyz,
             keep_scratch=bool(args.keep_scratch),
             keep_logs=bool(args.keep_logs),
+            parse_solvation=args.parse_solvation,
+            sp_energy=args.sp_energy,
             override_solvation=bool(args.override_solvation),
             dry_run=bool(args.dry_run),
             opt_level=args.opt_level,
         )
         spec.assign_boltzmann_microstate_populations(temperature_k=298.15)
-
     if not args.no_plot:
         imgs = spec.generate_protomer_plot(n_columns=5)
         show_images(imgs, mode="vertical")
