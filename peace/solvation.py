@@ -71,6 +71,22 @@ def _parse_first_float(patterns: list[str], text: str) -> Optional[float]:
             except ValueError:
                 continue
     return None
+    
+def _parse_last_float(patterns: list[str], text: str) -> Optional[float]:
+    """
+    Parse the last matching float for each pattern (useful when logs contain
+    iterative/intermediate energies and a final summary value).
+    """
+    for pat in patterns:
+        matches = list(re.finditer(pat, text, flags=re.IGNORECASE | re.MULTILINE))
+        if not matches:
+            continue
+        for m in reversed(matches):
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
 
 
 def _set_mol_prop_str(mol: Chem.Mol, key: str, value: Optional[str]) -> None:
@@ -172,7 +188,7 @@ def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: f
     Build xTB xcontrol constraints for protonated nitrogens and attached H atoms.
 
     For each ammonium-like N+ center, write:
-      $fix
+      $constrain
        distance: N_idx, H_idx, <fixed_distance>
       $end
 
@@ -197,7 +213,7 @@ def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: f
             constraints.append(f" distance: {n_idx}, {h_idx}, {fixed_distance:.2f}")
 
     if constraints:
-        content = "$fix\n" + "\n".join(constraints) + "\n$end\n"
+        content = "$constrain\n" + "\n".join(constraints) + "\n$end\n"
         xcontrol_path.write_text(content)
     elif xcontrol_path.exists():
         xcontrol_path.unlink()
@@ -208,11 +224,9 @@ def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: f
 def _parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
-        rf"TOTAL ENERGY[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Total energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"total energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 def _parse_xtb_total_free_energy_hartree(text: str) -> Optional[float]:
@@ -222,21 +236,19 @@ def _parse_xtb_total_free_energy_hartree(text: str) -> Optional[float]:
         rf"Total free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"total free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 def _parse_xtb_solvent_free_energy_hartree(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
         # Common phrasing variants in xTB-like outputs.
-        rf"free energy of solvation[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Free energy of solvation[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"solvation free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"cpcm[xX][^\S\r\n]*.*free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"Delta\s*G.*solv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"Gsolv[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 def _parse_xtb_zpe_hartree(text: str) -> Optional[float]:
@@ -246,7 +258,7 @@ def _parse_xtb_zpe_hartree(text: str) -> Optional[float]:
         rf"Zero point energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"ZPE[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 def _parse_xtb_thermal_gibbs_correction_hartree(text: str) -> Optional[float]:
@@ -257,7 +269,7 @@ def _parse_xtb_thermal_gibbs_correction_hartree(text: str) -> Optional[float]:
         rf"thermal correction to Gibbs free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
         rf"Gibbs free energy[^\S\r\n]*correction[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
     ]
-    return _parse_first_float(patterns, text)
+    return _parse_last_float(patterns, text)
 
 
 @dataclass(frozen=True)
@@ -397,8 +409,7 @@ def _run_xtb_optimization(
 
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
-        f"{input_flag}"
-        f'--driver "gxtb -grad -c xtbdriver.xyz" '
+        f"{input_flag} "
         f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)}"
     )
     _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
@@ -661,7 +672,7 @@ def run_protomer_solvation(
 
     Steps:
     1) Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
-    2) g-xTB optimization with implicit solvent (xTB + gxtb driver).
+    2) xTB optimization with implicit solvent. (g-xTB not supported yet!)
     3) CPCM-X SP solvation energy using GFN2-xTB.
     4) Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
