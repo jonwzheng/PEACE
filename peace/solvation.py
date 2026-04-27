@@ -245,14 +245,6 @@ def _parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
     return _parse_last_float(patterns, text)
 
 
-def _parse_xtb_total_free_energy_hartree(text: str) -> Optional[float]:
-    float_re = _float_regex()
-    patterns = [
-        rf"total free energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-    ]
-    return _parse_last_float(patterns, text)
-
-
 def _parse_xtb_solvent_free_energy_hartree(
     text: str,
     *,
@@ -288,7 +280,7 @@ class SolvationWorkflowResult:
     xtb_optimized_xyz: Optional[Path]
     solvation_free_energy_kcal_mol: Optional[float]
     gas_sp_energy_kcal_mol: Optional[float]
-    frequency_contribution_kcal_mol: Optional[float]
+    rrho_contribution_kcal_mol: Optional[float]
     solution_phase_free_energy_kcal_mol: Optional[float]
     stdout_tail: str
 
@@ -666,7 +658,6 @@ def _run_hessian_and_parse_energies(
         )
 
     gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_hess.stdout)
-    total_free_energy_h = _parse_xtb_total_free_energy_hartree(cp_hess.stdout)
     rrho_contrib_h = _parse_xtb_rrho_contrib(cp_hess.stdout)
 
     gas_sp_energy_kcal_mol = None
@@ -674,33 +665,29 @@ def _run_hessian_and_parse_energies(
     if gas_sp_energy_h is not None:
         gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
 
-    freq_contrib_h: Optional[float] = None
+    rrho_contrib_kcal_mol = None
     if rrho_contrib_h is not None:
-        freq_contrib_h = rrho_contrib_h
+        rrho_contrib_kcal_mol = rrho_contrib_h * HARTREE_TO_KCAL_MOL
 
-    frequency_contribution_kcal_mol = None
-    if freq_contrib_h is not None:
-        frequency_contribution_kcal_mol = freq_contrib_h * HARTREE_TO_KCAL_MOL
-
-    return gas_sp_energy_kcal_mol, frequency_contribution_kcal_mol, gas_sp_energy_h
+    return gas_sp_energy_kcal_mol, rrho_contrib_kcal_mol, gas_sp_energy_h
 
 
 def _compute_solution_phase_energy(
     gas_sp_energy_h: Optional[float],
     gas_sp_energy_kcal_mol: Optional[float],
     solvation_free_energy_kcal_mol: Optional[float],
-    frequency_contribution_kcal_mol: Optional[float],
+    rrho_contribution_kcal_mol: Optional[float],
     log_paths: list[Path],
 ) -> Optional[float]:
     solution_phase_free_energy_kcal_mol = None
     if (
         gas_sp_energy_h is not None
         and solvation_free_energy_kcal_mol is not None
-        and frequency_contribution_kcal_mol is not None
+        and rrho_contribution_kcal_mol is not None
     ):
         solution_phase_free_energy_kcal_mol = (
             gas_sp_energy_kcal_mol
-            + frequency_contribution_kcal_mol
+            + rrho_contribution_kcal_mol
             + solvation_free_energy_kcal_mol
         )
 
@@ -709,7 +696,7 @@ def _compute_solution_phase_energy(
         "OK",
         "parsed energies "
         f"gas_sp_energy_kcal_mol={gas_sp_energy_kcal_mol} "
-        f"frequency_contribution_kcal_mol={frequency_contribution_kcal_mol} "
+        f"rrho_contribution_kcal_mol={rrho_contribution_kcal_mol} "
         f"solution_phase_free_energy_kcal_mol={solution_phase_free_energy_kcal_mol}",
     )
     return solution_phase_free_energy_kcal_mol
@@ -722,7 +709,7 @@ def _persist_protomer_results(
     conformer_energy_kcal_mol: Optional[float],
     solvation_free_energy_kcal_mol: Optional[float],
     gas_sp_energy_kcal_mol: Optional[float],
-    frequency_contribution_kcal_mol: Optional[float],
+    rrho_contribution_kcal_mol: Optional[float],
     solution_phase_free_energy_kcal_mol: Optional[float],
 ) -> None:
     protomer.mol.SetProp("peace_charge", str(charge))
@@ -731,8 +718,8 @@ def _persist_protomer_results(
     _set_mol_prop_double(protomer.mol, "peace_gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
     _set_mol_prop_double(
         protomer.mol,
-        "peace_frequency_contribution_kcal_mol",
-        frequency_contribution_kcal_mol,
+        "peace_rrho_contribution_kcal_mol",
+        rrho_contribution_kcal_mol,
     )
     _set_mol_prop_double(
         protomer.mol,
@@ -853,7 +840,7 @@ def run_protomer_solvation(
     xtbopt_xyz_block: Optional[str] = None
     solvation_free_energy_kcal_mol: Optional[float] = None
     gas_sp_energy_kcal_mol: Optional[float] = None
-    frequency_contribution_kcal_mol: Optional[float] = None
+    rrho_contribution_kcal_mol: Optional[float] = None
     solution_phase_free_energy_kcal_mol: Optional[float] = None
 
     try:
@@ -871,7 +858,7 @@ def run_protomer_solvation(
                 xtb_optimized_xyz=None,
                 solvation_free_energy_kcal_mol=None,
                 gas_sp_energy_kcal_mol=None,
-                frequency_contribution_kcal_mol=None,
+                rrho_contribution_kcal_mol=None,
                 solution_phase_free_energy_kcal_mol=None,
                 stdout_tail="dry_run; skipped confgen/opt/energy steps.",
             )
@@ -912,7 +899,7 @@ def run_protomer_solvation(
             log_paths=log_paths,
         )
 
-        gas_sp_hess_kcal_mol, frequency_contribution_kcal_mol, gas_sp_hess_h = _run_hessian_and_parse_energies(
+        gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, gas_sp_hess_h = _run_hessian_and_parse_energies(
             scratch_dir=scratch_dir,
             xtbopt_xyz_path=xtbopt_xyz_path,
             xtb_executable=xtb_executable,
@@ -941,7 +928,7 @@ def run_protomer_solvation(
             gas_sp_energy_h,
             gas_sp_energy_kcal_mol,
             solvation_free_energy_kcal_mol,
-            frequency_contribution_kcal_mol,
+            rrho_contribution_kcal_mol,
             log_paths,
         )
 
@@ -955,7 +942,7 @@ def run_protomer_solvation(
 
         solvation_free_energy_kcal_mol = None
         gas_sp_energy_kcal_mol = None
-        frequency_contribution_kcal_mol = None
+        rrho_contribution_kcal_mol = None
         solution_phase_free_energy_kcal_mol = None
 
         stdout_tail = str(e)
@@ -975,7 +962,7 @@ def run_protomer_solvation(
             xtb_optimized_xyz=preserved_xtbopt_path if preserved_xtbopt_path is not None else xtbopt_xyz_path,
             solvation_free_energy_kcal_mol=None,
             gas_sp_energy_kcal_mol=None,
-            frequency_contribution_kcal_mol=None,
+            rrho_contribution_kcal_mol=None,
             solution_phase_free_energy_kcal_mol=None,
             stdout_tail=stdout_tail[-4000:],
         )
@@ -986,7 +973,7 @@ def run_protomer_solvation(
         conformer_energy_kcal_mol=conformer_energy_kcal_mol,
         solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
         gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
-        frequency_contribution_kcal_mol=frequency_contribution_kcal_mol,
+        rrho_contribution_kcal_mol=rrho_contribution_kcal_mol,
         solution_phase_free_energy_kcal_mol=solution_phase_free_energy_kcal_mol,
     )
 
@@ -1004,7 +991,7 @@ def run_protomer_solvation(
         log_paths,
         "SUCCESS",
         f"protomer_id={protomer_id} gas={gas_sp_energy_kcal_mol} solv={solvation_free_energy_kcal_mol} "
-        f"freq={frequency_contribution_kcal_mol} solution={solution_phase_free_energy_kcal_mol}",
+        f"freq={rrho_contribution_kcal_mol} solution={solution_phase_free_energy_kcal_mol}",
     )
 
     return SolvationWorkflowResult(
@@ -1012,7 +999,7 @@ def run_protomer_solvation(
         xtb_optimized_xyz=final_xtbopt_path if final_xtbopt_path is not None else xtbopt_xyz_path,
         solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
         gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
-        frequency_contribution_kcal_mol=frequency_contribution_kcal_mol,
+        rrho_contribution_kcal_mol=rrho_contribution_kcal_mol,
         solution_phase_free_energy_kcal_mol=solution_phase_free_energy_kcal_mol,
         stdout_tail=stdout_tail[-4000:],
     )
@@ -1162,7 +1149,7 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
         "peace_solution_phase_free_energy_kcal_mol",
         "peace_solvation_free_energy_kcal_mol",
         "peace_gas_sp_energy_kcal_mol",
-        "peace_frequency_contribution_kcal_mol",
+        "peace_rrho_contribution_kcal_mol",
         "peace_conformer_energy_kcal_mol",
     ]
     for k in summary_keys:
