@@ -685,6 +685,9 @@ def _compute_solution_phase_energy(
         and solvation_free_energy_kcal_mol is not None
         and rrho_contribution_kcal_mol is not None
     ):
+        # see doi:10.1021/acs.jpca.3c04382.
+        # Gtotal = Egas,0K + DG(RRHO) + DGSolv
+
         solution_phase_free_energy_kcal_mol = (
             gas_sp_energy_kcal_mol
             + rrho_contribution_kcal_mol
