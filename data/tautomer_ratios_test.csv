@@ -1,0 +1,20 @@
+molecule,SMILES,f_zwit,source,notes
+cis-apovincaminic acid,CC[C@@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999995926213818,doi.org/10.1002/cmdc.202000164,
+trans-apovincaminic acid,CC[C@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999986817606392,doi.org/10.1002/cmdc.202000164,
+niflumic acid,O=C(O)c1cccnc1Nc1cccc(C(F)(F)F)c1,0.940649056897232,doi.org/10.1002/cmdc.202000164,
+morphine,CN1CC[C@]23c4c5ccc(O)c4O[C@H]2[C@@H](O)C=C[C@H]3[C@H]1C5,0.25746444105693,doi.org/10.1002/cmdc.202000164,
+5-HTP,NC(Cc1c[nH]c2ccc(O)cc12)C(=O)O,0.999994988152782,doi.org/10.1002/cmdc.202000164,
+thyroxine,N[C@@H](Cc1cc(I)c(Oc2cc(I)c(O)c(I)c2)c(I)c1)C(=O)O,0.999971160516709,doi.org/10.1002/cmdc.202000164,
+liothyronine,N[C@@H](Cc1cc(I)c(Oc2ccc(O)c(I)c2)c(I)c1)C(=O)O,0.999975453513388,doi.org/10.1002/cmdc.202000164,
+ciprofloxacin,O=C(O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O,0.686300257683312,doi.org/10.1021/ed074p1311,surprisingly close results
+serotonin (5-HT),NCCc1c[nH]c2ccc(O)cc12,0.476990412702438,doi.org/10.1002/cbdv.200800087,tautomer fail
+m-nitrophenylglycine,O=C(O)CNc1cccc([N+](=O)[O-])c1,0,doi.org/10.26190/unsworks/10693,
+m-cyanophenylglycine,O=C(O)CNc1cccc(C#N)c1,0,doi.org/10.26190/unsworks/10693,
+m-chlorophenylglycine,O=C(O)CNc1cccc(Cl)c1,0.11,doi.org/10.26190/unsworks/10693,
+m-acetylphenylglycine,O=C(O)CNc1cccc(C(=O)C)c1,0.13,doi.org/10.26190/unsworks/10693,
+p-chlorophenylglycine,O=C(O)CNc1ccc(Cl)cc1,0.295,doi.org/10.26190/unsworks/10693,
+m-methoxyphenylglycine,O=C(O)CNc1cccc(OC)c1,0.38,doi.org/10.26190/unsworks/10693,
+phenylglycine,O=C(O)CNc1ccccc1,0.645,doi.org/10.26190/unsworks/10693,
+m-methylphenylglycine,O=C(O)CNc1cccc(C)c1,0.68,doi.org/10.26190/unsworks/10693,
+p-methylphenylglycine,O=C(O)CNc1ccc(C)cc1,0.834,doi.org/10.26190/unsworks/10693,
+p-methoxyphenylglycine,O=C(O)CNc1ccc(OC)cc1,0.907,doi.org/10.26190/unsworks/10693,"qualitatively good agreement, esp compare to m-form"

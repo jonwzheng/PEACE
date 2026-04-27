@@ -5,6 +5,7 @@ results.csv
 peace/solvation_results/
 peace/results.csv
 peace/results_archive/
+data/.~lock*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
