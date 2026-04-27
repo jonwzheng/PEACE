@@ -272,17 +272,7 @@ def _parse_xtb_solvent_free_energy_hartree(
     return _parse_last_float(patterns, text)
 
 
-def _parse_xtb_zpe_hartree(text: str) -> Optional[float]:
-    float_re = _float_regex()
-    patterns = [
-        rf"Zero[-\s]*point energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"Zero point energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-        rf"ZPE[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-    ]
-    return _parse_last_float(patterns, text)
-
-
-def _parse_xtb_thermal_gibbs_correction_hartree(text: str) -> Optional[float]:
+def _parse_xtb_rrho_contrib(text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
         # xTB RRHO summary line, e.g.:
@@ -677,8 +667,7 @@ def _run_hessian_and_parse_energies(
 
     gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_hess.stdout)
     total_free_energy_h = _parse_xtb_total_free_energy_hartree(cp_hess.stdout)
-    zpe_h = _parse_xtb_zpe_hartree(cp_hess.stdout)
-    thermal_gibbs_h = _parse_xtb_thermal_gibbs_correction_hartree(cp_hess.stdout)
+    rrho_contrib_h = _parse_xtb_rrho_contrib(cp_hess.stdout)
 
     gas_sp_energy_kcal_mol = None
 
@@ -686,10 +675,8 @@ def _run_hessian_and_parse_energies(
         gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
 
     freq_contrib_h: Optional[float] = None
-    if zpe_h is not None and thermal_gibbs_h is not None:
-        freq_contrib_h = zpe_h + thermal_gibbs_h
-    elif gas_sp_energy_h is not None and total_free_energy_h is not None:
-        freq_contrib_h = total_free_energy_h - gas_sp_energy_h
+    if rrho_contrib_h is not None:
+        freq_contrib_h = rrho_contrib_h
 
     frequency_contribution_kcal_mol = None
     if freq_contrib_h is not None:
