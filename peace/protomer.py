@@ -16,6 +16,7 @@ class Protomer:
         # Keep a copy of the pre-optimization/input molecular graph for display/export.
         self.input_mol = copy.deepcopy(mol) if mol is not None else None
         self.ionization_sites = []
+        self.is_zwitterion = self._is_zwitterion_mol(mol) if mol is not None else False
 
     def __repr__(self):
         return f"Protomer {self.smiles}"
@@ -30,6 +31,29 @@ class Protomer:
     
     def highlight_ionization_sites(self):
         self.mol.__sssAtoms = self.ionization_sites
+
+    @staticmethod
+    def _is_zwitterion_mol(mol: Mol) -> bool:
+        """
+        Return True if a molecule contains BOTH:
+          1) a positively charged heavy atom bearing at least one hydrogen, and
+          2) a negatively charged heavy atom.
+        """
+        has_positive_heavy_atom_h = False
+        has_negative_heavy_atom = False
+
+        for atom in mol.GetAtoms():
+            if atom.GetAtomicNum() == 1:
+                continue
+            formal_charge = atom.GetFormalCharge()
+            if formal_charge > 0 and atom.GetTotalNumHs(includeNeighbors=True) > 0:
+                has_positive_heavy_atom_h = True
+            if formal_charge < 0:
+                has_negative_heavy_atom = True
+            if has_positive_heavy_atom_h and has_negative_heavy_atom:
+                return True
+
+        return False
     
 class Tautomer:
     def __init__(self, base_protomer : Protomer = None):
@@ -291,6 +315,23 @@ class Species:
                 }
             )
         return pd.DataFrame(rows)
+
+    def get_f_zwit(self) -> float:
+        """
+        Return total zwitterion fraction from assigned Boltzmann populations.
+
+        This sums `peace_boltzmann_fraction` over all protomers tagged as zwitterions.
+        """
+        f_zwit = 0.0
+        for tautomer in self.tautomers.values():
+            for protomer in tautomer.protomers.values():
+                if (
+                    protomer.is_zwitterion
+                    and protomer.mol is not None
+                    and protomer.mol.HasProp("peace_boltzmann_fraction")
+                ):
+                    f_zwit += float(protomer.mol.GetProp("peace_boltzmann_fraction"))
+        return float(f_zwit)
         
     def to_dataframe(self):
         rows = []
@@ -310,6 +351,7 @@ class Species:
                     "tautomer_id": taut_idx,
                     "protomer_id": prot_idx,
                     "protomer_smiles": protomer.smiles,
+                    "is_zwitterion": bool(protomer.is_zwitterion),
                 }
                 if protomer.mol is not None:
                     for prop in solvation_props:

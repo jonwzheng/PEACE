@@ -187,6 +187,8 @@ if __name__ == "__main__":
 
         _log("Calculating Boltzmann populations")
         spec.assign_boltzmann_microstate_populations(temperature_k=298.15)
+        f_zwit = spec.get_f_zwit()
+        _log(f"Total predicted zwitterion fraction (f_zwit): {f_zwit:.5f}")
         for taut_idx, taut in tautomer_items:
             _log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
             for prot_idx, protomer in taut.protomers.items():
