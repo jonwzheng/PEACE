@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg
-   width="201.1776mm"
-   height="60.238846mm"
-   viewBox="0 0 570.26749 170.75567"
+   width="186.36095mm"
+   height="42.448814mm"
+   viewBox="0 0 528.26752 120.32727"
    version="1.2"
    id="svg11"
    sodipodi:docname="header.svg"
-   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
+   inkscape:version="1.3.1 (91b66b0, 2023-11-16)"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -25,15 +25,15 @@
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
-     inkscape:zoom="1.0468833"
-     inkscape:cx="-126.56616"
-     inkscape:cy="91.223153"
+     inkscape:zoom="1.715186"
+     inkscape:cx="157.12581"
+     inkscape:cy="92.409802"
      inkscape:window-width="3362"
      inkscape:window-height="1363"
      inkscape:window-x="78"
      inkscape:window-y="40"
      inkscape:window-maximized="1"
-     inkscape:current-layer="g3-1"
+     inkscape:current-layer="svg11"
      showgrid="false" />
   <title
      id="title1">Qt SVG Document</title>
@@ -76,7 +76,7 @@
        x2="1070.9417"
        y2="486.95828"
        gradientUnits="userSpaceOnUse"
-       gradientTransform="translate(2.3488356,-3.4120079)" />
+       gradientTransform="matrix(1.4648826,-0.01683307,-0.01741196,1.4846512,-466.35251,-224.6111)" />
   </defs>
   <g
      fill="none"
@@ -86,249 +86,253 @@
      stroke-linecap="square"
      stroke-linejoin="bevel"
      id="g11"
-     transform="translate(-342.73833,-338.0604)">
+     transform="matrix(0.92330508,0,0,0.94839434,-307.97822,-344.33078)">
     <g
-       fill="#f0f0f0"
-       fill-opacity="1"
-       stroke="#000000"
-       stroke-opacity="1"
-       stroke-width="0.13588"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="matrix(2.1077637,3.6507537,-3.7129978,2.1437003,211.38682,-4456.5743)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g3-1"
-       inkscape:transform-center-x="-4.8737451"
-       inkscape:transform-center-y="675.82097"
-       style="stroke-width:1.33354;stroke-dasharray:none">
-      <circle
-         cx="1050.7748"
-         cy="486.95828"
-         r="19.5"
-         id="circle2-27"
-         style="fill:url(#linearGradient4888);fill-opacity:1;stroke-width:1.33354;stroke-dasharray:none"
-         inkscape:label="circle2-27" />
-    </g>
-    <g
-       fill="none"
-       stroke="#7d7d7d"
-       stroke-opacity="1"
-       stroke-width="4"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="rotate(58.478501,889.48454,30.292047)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g2"
-       style="stroke-width:5.66929;stroke-dasharray:none">
-      <polyline
+       id="g1"
+       transform="matrix(0.72468378,0,0,0.72468378,165.15648,121.21107)">
+      <g
+         fill="#f0f0f0"
+         fill-opacity="1"
+         stroke="#000000"
+         stroke-opacity="1"
+         stroke-width="0.13588"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="matrix(2.1077637,3.6507537,-3.7129978,2.1437003,211.38682,-4456.5743)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g3-1"
+         inkscape:transform-center-x="-4.8737451"
+         inkscape:transform-center-y="675.82097"
+         style="stroke-width:1.33354;stroke-dasharray:none">
+        <circle
+           cx="1050.7748"
+           cy="486.95828"
+           r="19.5"
+           id="circle2-27"
+           style="fill:url(#linearGradient4888);fill-opacity:1;stroke-width:1.33354;stroke-dasharray:none"
+           inkscape:label="circle2-27" />
+      </g>
+      <g
          fill="none"
-         vector-effect="none"
-         points="1081.26,465.919 1135.67,498.467 "
-         id="polyline1"
-         style="stroke-width:5.66929;stroke-dasharray:none" />
-    </g>
-    <g
-       fill="none"
-       stroke="#7d7d7d"
-       stroke-opacity="1"
-       stroke-width="4"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="rotate(58.4785,937.13838,6.0811086)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g2-0"
-       style="stroke-width:5.66929;stroke-dasharray:none">
-      <polyline
+         stroke="#7d7d7d"
+         stroke-opacity="1"
+         stroke-width="4"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="rotate(58.478501,889.48454,30.292047)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g2"
+         style="stroke-width:5.66929;stroke-dasharray:none">
+        <polyline
+           fill="none"
+           vector-effect="none"
+           points="1081.26,465.919 1135.67,498.467 "
+           id="polyline1"
+           style="stroke-width:5.66929;stroke-dasharray:none" />
+      </g>
+      <g
          fill="none"
-         vector-effect="none"
-         points="1081.26,465.919 1135.67,498.467 "
-         id="polyline1-3"
-         style="stroke-width:5.66929;stroke-dasharray:none"
-         transform="rotate(0.91286038,1027.8189,433.61121)" />
-    </g>
-    <g
-       fill="#f0f0f0"
-       fill-opacity="1"
-       stroke="#000000"
-       stroke-opacity="1"
-       stroke-width="1"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="matrix(0.29399766,0.47935673,-0.50586462,0.3102554,537.26652,-172.00091)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g3"
-       style="stroke-width:4.90703;stroke-dasharray:none">
-      <circle
-         cx="1082.5"
-         cy="467.5"
-         r="19.5"
-         id="circle2"
-         style="stroke-width:4.90703;stroke-dasharray:none" />
-    </g>
-    <g
-       fill="#f0f0f0"
-       fill-opacity="1"
-       stroke="#7d7d7d"
-       stroke-opacity="1"
-       stroke-width="4"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="rotate(58.4785,937.99688,3.5887702)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g4"
-       style="stroke-width:5.66929;stroke-dasharray:none">
-      <polyline
-         fill="none"
-         vector-effect="none"
-         points="1134.87,562.066 1135.67,498.467 "
-         id="polyline3"
-         style="stroke-width:5.66929;stroke-dasharray:none" />
-    </g>
-    <g
-       fill="#f0f0f0"
-       fill-opacity="1"
-       stroke="#7d7d7d"
-       stroke-opacity="1"
-       stroke-width="4"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="rotate(58.4785,935.31034,-2.5689532)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g6"
-       style="stroke-width:5.66929;stroke-dasharray:none">
-      <polyline
-         fill="none"
-         vector-effect="none"
-         points="1191.33,467.558 1135.67,498.467 "
-         id="polyline5"
-         style="stroke-width:5.66929;stroke-dasharray:none" />
-    </g>
-    <g
-       fill="#f0f0f0"
-       fill-opacity="1"
-       stroke="#7d7d7d"
-       stroke-opacity="1"
-       stroke-width="4"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="rotate(58.4785,940.75833,-2.1879547)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g8">
-      <polyline
-         fill="none"
-         vector-effect="none"
-         points="1135.67,498.467 1135.29,498.344 "
-         id="polyline7" />
-    </g>
-    <g
-       fill="#7f7f7f"
-       fill-opacity="1"
-       stroke="#000000"
-       stroke-opacity="1"
-       stroke-width="1.29141"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="matrix(0.40172833,0.66520724,-0.65500922,0.40798295,489.75498,-522.52956)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g9"
-       style="stroke-width:3.66069;stroke-dasharray:none">
-      <circle
-         cx="1136.5"
-         cy="499.5"
-         r="36.5"
-         id="circle8"
-         style="stroke-width:3.66069;stroke-dasharray:none" />
-    </g>
-    <g
-       fill="#ff0d0d"
-       fill-opacity="1"
-       stroke="#000000"
-       stroke-opacity="1"
-       stroke-width="1"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="rotate(58.4785,998.14036,-28.867641)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g10"
-       style="stroke-width:2.83465;stroke-dasharray:none">
-      <circle
-         cx="1136.5"
-         cy="499.5"
-         r="21.5"
-         id="circle9"
-         style="stroke-width:2.83465;stroke-dasharray:none" />
-    </g>
-    <g
-       fill="#f0f0f0"
-       fill-opacity="1"
-       stroke="#000000"
-       stroke-opacity="1"
-       stroke-width="1"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="matrix(0.29399766,0.47935673,-0.50586462,0.3102554,591.56465,-199.92524)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g3-5"
-       style="stroke-width:4.90703;stroke-dasharray:none">
-      <circle
-         cx="1082.5"
-         cy="467.5"
-         r="19.5"
-         id="circle2-3"
-         style="stroke-width:4.90703;stroke-dasharray:none" />
-    </g>
-    <g
-       fill="#f0f0f0"
-       fill-opacity="1"
-       stroke="#000000"
-       stroke-opacity="1"
-       stroke-width="1"
-       stroke-linecap="square"
-       stroke-linejoin="bevel"
-       transform="matrix(0.29399766,0.47935673,-0.50586462,0.3102554,481.33642,-199.02805)"
-       font-family="'Sans Serif'"
-       font-size="9px"
-       font-weight="400"
-       font-style="normal"
-       id="g3-6"
-       inkscape:label="g3-6"
-       style="stroke-width:4.90703;stroke-dasharray:none">
-      <circle
-         cx="1082.5"
-         cy="467.5"
-         r="19.5"
-         id="circle2-2"
-         style="stroke-width:4.90703;stroke-dasharray:none" />
+         stroke="#7d7d7d"
+         stroke-opacity="1"
+         stroke-width="4"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="rotate(58.4785,937.13838,6.0811086)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g2-0"
+         style="stroke-width:5.66929;stroke-dasharray:none">
+        <polyline
+           fill="none"
+           vector-effect="none"
+           points="1081.26,465.919 1135.67,498.467 "
+           id="polyline1-3"
+           style="stroke-width:5.66929;stroke-dasharray:none"
+           transform="rotate(0.91286038,1027.8189,433.61121)" />
+      </g>
+      <g
+         fill="#f0f0f0"
+         fill-opacity="1"
+         stroke="#000000"
+         stroke-opacity="1"
+         stroke-width="1"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="matrix(0.29399766,0.47935673,-0.50586462,0.3102554,537.26652,-172.00091)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g3"
+         style="stroke-width:4.90703;stroke-dasharray:none">
+        <circle
+           cx="1082.5"
+           cy="467.5"
+           r="19.5"
+           id="circle2"
+           style="stroke-width:4.90703;stroke-dasharray:none" />
+      </g>
+      <g
+         fill="#f0f0f0"
+         fill-opacity="1"
+         stroke="#7d7d7d"
+         stroke-opacity="1"
+         stroke-width="4"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="rotate(58.4785,937.99688,3.5887702)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g4"
+         style="stroke-width:5.66929;stroke-dasharray:none">
+        <polyline
+           fill="none"
+           vector-effect="none"
+           points="1134.87,562.066 1135.67,498.467 "
+           id="polyline3"
+           style="stroke-width:5.66929;stroke-dasharray:none" />
+      </g>
+      <g
+         fill="#f0f0f0"
+         fill-opacity="1"
+         stroke="#7d7d7d"
+         stroke-opacity="1"
+         stroke-width="4"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="rotate(58.4785,935.31034,-2.5689532)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g6"
+         style="stroke-width:5.66929;stroke-dasharray:none">
+        <polyline
+           fill="none"
+           vector-effect="none"
+           points="1191.33,467.558 1135.67,498.467 "
+           id="polyline5"
+           style="stroke-width:5.66929;stroke-dasharray:none" />
+      </g>
+      <g
+         fill="#f0f0f0"
+         fill-opacity="1"
+         stroke="#7d7d7d"
+         stroke-opacity="1"
+         stroke-width="4"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="rotate(58.4785,940.75833,-2.1879547)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g8">
+        <polyline
+           fill="none"
+           vector-effect="none"
+           points="1135.67,498.467 1135.29,498.344 "
+           id="polyline7" />
+      </g>
+      <g
+         fill="#7f7f7f"
+         fill-opacity="1"
+         stroke="#000000"
+         stroke-opacity="1"
+         stroke-width="1.29141"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="matrix(0.40172833,0.66520724,-0.65500922,0.40798295,489.75498,-522.52956)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g9"
+         style="stroke-width:3.66069;stroke-dasharray:none">
+        <circle
+           cx="1136.5"
+           cy="499.5"
+           r="36.5"
+           id="circle8"
+           style="stroke-width:3.66069;stroke-dasharray:none" />
+      </g>
+      <g
+         fill="#ff0d0d"
+         fill-opacity="1"
+         stroke="#000000"
+         stroke-opacity="1"
+         stroke-width="1"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="rotate(58.4785,998.14036,-28.867641)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g10"
+         style="stroke-width:2.83465;stroke-dasharray:none">
+        <circle
+           cx="1136.5"
+           cy="499.5"
+           r="21.5"
+           id="circle9"
+           style="stroke-width:2.83465;stroke-dasharray:none" />
+      </g>
+      <g
+         fill="#f0f0f0"
+         fill-opacity="1"
+         stroke="#000000"
+         stroke-opacity="1"
+         stroke-width="1"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="matrix(0.29399766,0.47935673,-0.50586462,0.3102554,591.56465,-199.92524)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g3-5"
+         style="stroke-width:4.90703;stroke-dasharray:none">
+        <circle
+           cx="1082.5"
+           cy="467.5"
+           r="19.5"
+           id="circle2-3"
+           style="stroke-width:4.90703;stroke-dasharray:none" />
+      </g>
+      <g
+         fill="#f0f0f0"
+         fill-opacity="1"
+         stroke="#000000"
+         stroke-opacity="1"
+         stroke-width="1"
+         stroke-linecap="square"
+         stroke-linejoin="bevel"
+         transform="matrix(0.29399766,0.47935673,-0.50586462,0.3102554,481.33642,-199.02805)"
+         font-family="'Sans Serif'"
+         font-size="9px"
+         font-weight="400"
+         font-style="normal"
+         id="g3-6"
+         inkscape:label="g3-6"
+         style="stroke-width:4.90703;stroke-dasharray:none">
+        <circle
+           cx="1082.5"
+           cy="467.5"
+           r="19.5"
+           id="circle2-2"
+           style="stroke-width:4.90703;stroke-dasharray:none" />
+      </g>
     </g>
   </g>
   <metadata
@@ -342,24 +346,26 @@
   </metadata>
   <text
      xml:space="preserve"
-     style="font-size:170px;font-family:Arial;-inkscape-font-specification:'Arial, Normal';text-align:center;text-anchor:middle;fill:#000000;fill-opacity:1;stroke:none;stroke-width:5.66929;stroke-linejoin:bevel;stroke-dasharray:none;paint-order:fill markers stroke"
-     x="472.51752"
-     y="144.64484"
-     id="text11"><tspan
-       sodipodi:role="line"
-       id="tspan11"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:170px;font-family:'Latin Modern Sans';-inkscape-font-specification:'Latin Modern Sans, Normal';font-variant-ligatures:normal;font-variant-caps:normal;font-variant-numeric:normal;font-variant-east-asian:normal;fill:#000000;fill-opacity:1;stroke-width:5.66929;stroke-dasharray:none"
-       x="472.51752"
-       y="144.64484">CE</tspan></text>
-  <text
-     xml:space="preserve"
-     style="font-size:170px;font-family:'Latin Modern Sans';-inkscape-font-specification:'Latin Modern Sans, Normal';text-align:center;text-anchor:middle;fill:#000000;stroke-width:5.6693;stroke-linejoin:bevel;paint-order:fill markers stroke;stop-color:#000000"
-     x="88.740005"
-     y="145.2339"
-     id="text1441"><tspan
+     style="font-size:168.728px;font-family:'Latin Modern Sans';-inkscape-font-specification:'Latin Modern Sans, Normal';text-align:center;text-anchor:middle;fill:#000000;stroke-width:5.62687;stroke-linejoin:bevel;paint-order:fill markers stroke;stop-color:#000000"
+     x="88.075859"
+     y="119.74554"
+     id="text1441"
+     transform="scale(1.0075411,0.99251535)"><tspan
        sodipodi:role="line"
        id="tspan1439"
-       style="stroke-width:5.66929"
-       x="88.740005"
-       y="145.2339">PE</tspan></text>
+       style="stroke-width:5.62686"
+       x="88.075859"
+       y="119.74554">PE</tspan></text>
+  <text
+     xml:space="preserve"
+     style="font-size:168.728px;font-family:'Latin Modern Sans';-inkscape-font-specification:'Latin Modern Sans, Normal';text-align:center;text-anchor:middle;fill:#000000;stroke-width:5.62687;stroke-linejoin:bevel;paint-order:fill markers stroke;stop-color:#000000"
+     x="420.06104"
+     y="120.22085"
+     id="text1441-7"
+     transform="scale(1.0075411,0.99251535)"><tspan
+       sodipodi:role="line"
+       id="tspan1439-5"
+       style="stroke-width:5.62686"
+       x="420.06104"
+       y="120.22085">CE</tspan></text>
 </svg>
