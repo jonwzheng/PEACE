@@ -54,6 +54,7 @@ class ChargeEngine:
         Search a species for tautomers, given a reference tautomer (which has a reference protomer).
         """
         ref_mol = spec.tautomers[0].protomers[0].mol
+        AllChem.AssignStereochemistry(ref_mol, cleanIt=True, force=True)
         results = self.tautomer_enumerator.Enumerate(mol = ref_mol)
 
         # TODO: Find atoms that correspond to forbidden groups
@@ -69,6 +70,14 @@ class ChargeEngine:
 
         atom_ids = list(set(atom_ids))
         candidate_smiles = [spec.tautomers[0].protomers[0].smiles]
+
+        # Keep only tautomers that preserve assigned tetrahedral stereochemistry
+        # from the reference structure.
+        ref_chiral_centers = dict(
+            AllChem.FindMolChiralCenters(
+                ref_mol, includeUnassigned=False, useLegacyImplementation=False
+            )
+        )
 
         def check_atom_for_equivalence(atom_1: Atom, atom_2: Atom) -> bool:
             for m in ['GetFormalCharge', 'GetNumImplicitHs', 'GetAtomicNum', 'GetDegree','GetHybridization']:
@@ -90,6 +99,17 @@ class ChargeEngine:
         for smiles in results.smiles:
             tautomerized_atoms = []
             analyte_mol = AllChem.MolFromSmiles(smiles)
+            AllChem.AssignStereochemistry(analyte_mol, cleanIt=True, force=True)
+            analyte_chiral_centers = dict(
+                AllChem.FindMolChiralCenters(
+                    analyte_mol, includeUnassigned=False, useLegacyImplementation=False
+                )
+            )
+
+            # reject if  chiral center flips or disappears compared to reference
+            if any(analyte_chiral_centers.get(idx) != label for idx, label in ref_chiral_centers.items()):
+                continue
+
             for atom in analyte_mol.GetAtoms():
                 idx = atom.GetIdx()
                 if check_atom_for_equivalence(atom, ref_mol_atoms[idx]) == False:
