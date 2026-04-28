@@ -201,32 +201,43 @@ def _write_xyz(mol: Chem.Mol, path: Path, *, conf_id: int = 0) -> None:
 
 def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: float = 1.05) -> int:
     """
-    Build xTB xcontrol constraints for protonated nitrogens and attached H atoms.
+    Build xTB xcontrol constraints for positively charged zwitterionic X-H sites.
 
-    For each ammonium-like N+ center, write:
+    For each heavy atom with formal charge +1 that is bonded to at least one
+    hydrogen, write:
       $constrain
-       distance: N_idx, H_idx, <fixed_distance>
+       distance: X_idx, H_idx, <fixed_distance>
       $end
+
+    Bond distances are selected by heavy-atom element symbol where available.
+    If no element-specific entry exists, ``fixed_distance`` is used.
 
     Returns number of generated distance constraints.
     """
     mol_h = Chem.AddHs(Chem.Mol(mol), addCoords=True)
     constraints: list[str] = []
+    zwitterion_xh_distance_by_symbol = {
+        "N": 1.03,
+    }
 
     for atom in mol_h.GetAtoms():
-        if atom.GetAtomicNum() != 7:
+        if atom.GetAtomicNum() == 1:
             continue
-        if atom.GetFormalCharge() <= 0:
+        if atom.GetFormalCharge() != 1:
             continue
 
         h_neighbors = [nbr for nbr in atom.GetNeighbors() if nbr.GetAtomicNum() == 1]
         if not h_neighbors:
             continue
 
-        n_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
+        heavy_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
+        constrained_distance = zwitterion_xh_distance_by_symbol.get(
+            atom.GetSymbol(),
+            fixed_distance,
+        )
         for h_atom in h_neighbors:
             h_idx = h_atom.GetIdx() + 1
-            constraints.append(f" distance: {n_idx},{h_idx},{fixed_distance:.2f}")
+            constraints.append(f" distance: {heavy_idx},{h_idx},{constrained_distance:.2f}")
 
     if constraints:
         content = "$constrain\n" + "\n".join(constraints) + "\n$end\n"
@@ -401,10 +412,11 @@ def _run_xtb_optimization(
         _log_status(
             log_paths,
             "OK",
-            f"generated xcontrol constraints for ammonium-like N-H bonds: n_constraints={n_constraints}",
+            "generated xcontrol constraints for positively charged heavy-atom X-H bonds: "
+            f"n_constraints={n_constraints}",
         )
     else:
-        _log_status(log_paths, "OK", "no ammonium-like N-H constraints generated")
+        _log_status(log_paths, "OK", "no positively charged heavy-atom X-H constraints generated")
 
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
@@ -556,8 +568,6 @@ def _run_cpcmx_single_point(
         )
 
     solvation_free_energy_h = _parse_xtb_solvent_free_energy_hartree(cp_sp.stdout, mode=parse_solvation)
-    if solvation_free_energy_h is None:
-        solvation_free_energy_h = _parse_xtb_total_free_energy_hartree(cp_sp.stdout)
 
     solvation_free_energy_kcal_mol = None
     if solvation_free_energy_h is not None:
