@@ -262,6 +262,14 @@ class Species:
                 f"No protomers found with property '{energy_prop}'. "
                 "Boltzmann populations were not assigned."
             )
+            return pd.DataFrame(
+                columns=[
+                    "tautomer_id",
+                    "protomer_id",
+                    "delta_g_kcal_mol",
+                    "boltzmann_fraction",
+                ]
+            )
 
         g_ref = min(g_i for _, _, _, g_i in entries)
         reduced = [-(g_i - g_ref) / rt for _, _, _, g_i in entries]
@@ -274,6 +282,15 @@ class Species:
             frac = float(weights[idx] / partition_q) if partition_q > 0 else 0.0
             protomer.mol.SetDoubleProp("peace_delta_g_kcal_mol", float(delta_g))
             protomer.mol.SetDoubleProp("peace_boltzmann_fraction", float(frac))
+            rows.append(
+                {
+                    "tautomer_id": taut_idx,
+                    "protomer_id": prot_idx,
+                    "delta_g_kcal_mol": float(delta_g),
+                    "boltzmann_fraction": float(frac),
+                }
+            )
+        return pd.DataFrame(rows)
         
     def to_dataframe(self):
         rows = []

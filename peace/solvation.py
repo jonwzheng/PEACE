@@ -8,7 +8,7 @@ from datetime import datetime
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDetermineBonds
@@ -824,6 +824,7 @@ def run_protomer_solvation(
     keep_scratch_on_failure: bool = False,
     dry_run: bool = False,
     timeout_s: Optional[int] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> SolvationWorkflowResult:
     """
     Solvates a protomer and gets the solution-phase energy
@@ -835,6 +836,10 @@ def run_protomer_solvation(
     4) Gas-phase SP from g-xTB driver (default) or xTB Hessian output.
     5) Gas-phase frequency calculation using GFN2-xTB (--hess).
     """
+    def _progress(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
     log_paths = scratch_context.log_paths
@@ -847,6 +852,7 @@ def run_protomer_solvation(
         "START",
         f"protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode}",
     )
+    _progress("preparing conformer")
 
     conformer_energy_kcal_mol: Optional[float] = None
     xtbopt_xyz_path: Optional[Path] = None
@@ -859,6 +865,7 @@ def run_protomer_solvation(
     try:
 
         if dry_run:
+            _progress("dry run enabled; skipping optimization workflow")
             _log_status(log_paths, "SKIP", "dry_run enabled; skipping xTB/g-xTB steps")
             _set_mol_prop_double(
                 protomer.mol,
@@ -884,6 +891,7 @@ def run_protomer_solvation(
         )
 
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
+        _progress("optimizing geometry")
 
         xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_xtb_optimization(
             mol=mol,
@@ -898,6 +906,7 @@ def run_protomer_solvation(
         )
 
         xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
+        _progress("computing solvation single point")
 
         solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
             scratch_dir=scratch_dir,
@@ -912,6 +921,7 @@ def run_protomer_solvation(
             log_paths=log_paths,
         )
 
+        _progress("computing frequencies")
         gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, gas_sp_hess_h = _run_hessian_and_parse_energies(
             scratch_dir=scratch_dir,
             xtbopt_xyz_path=xtbopt_xyz_path,
@@ -923,6 +933,7 @@ def run_protomer_solvation(
             log_paths=log_paths,
         )
         if sp_energy == "gxtb":
+            _progress("computing gas-phase single point")
             gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_gxtb_single_point_energy(
                 scratch_dir=scratch_dir,
                 xtbopt_xyz_path=xtbopt_xyz_path,
@@ -944,8 +955,10 @@ def run_protomer_solvation(
             rrho_contribution_kcal_mol,
             log_paths,
         )
+        _progress("finished optimization workflow")
 
     except Exception as e:
+        _progress(f"failed: {e}")
         _log_status(log_paths, "FAIL", f"workflow exception for protomer_id={protomer_id}: {e}")
         warnings.warn(
             f"Solvation workflow failed for protomer_id={protomer_id}: {e}",
@@ -1006,6 +1019,7 @@ def run_protomer_solvation(
         f"protomer_id={protomer_id} gas={gas_sp_energy_kcal_mol} solv={solvation_free_energy_kcal_mol} "
         f"freq={rrho_contribution_kcal_mol} solution={solution_phase_free_energy_kcal_mol}",
     )
+    _progress("success")
 
     return SolvationWorkflowResult(
         conformer_energy_kcal_mol=conformer_energy_kcal_mol,
