@@ -73,6 +73,11 @@ def _build_cli_parser():
         default=15.0,
         help="Exclude protomers from full post-screen optimization if screening delta exceeds energy threshold (kcal/mol).",
     )
+    p.add_argument(
+        "--exclude-unconverged",
+        action="store_true",
+        help="Exclude connectivity-mismatch protomers from Boltzmann weighting and f_zwit while still reporting them.",
+    )
     return p
 
 
@@ -284,7 +289,7 @@ if __name__ == "__main__":
                 placeholder_energy = min_postopt_solution_energy + screen_delta
             _set_optional_double_prop(protomer, "peace_screening_placeholder_solution_phase_free_energy_kcal_mol", placeholder_energy)
             _set_optional_double_prop(protomer, "peace_solution_phase_free_energy_kcal_mol", placeholder_energy)
-            protomer.mol.SetProp("peace_workflow_status", "screened_out_after_screening_step")
+            protomer.mol.SetProp("peace_workflow_status", "screened_out")
             _log(
                 "Screened out protomer "
                 f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
@@ -294,7 +299,24 @@ if __name__ == "__main__":
         _log(f"Optimization outputs saved under: {species_scratch}")
 
         _log("Calculating Boltzmann populations")
-        spec.assign_boltzmann_microstate_populations(temperature_k=298.15)
+        excluded_unconverged_count = 0
+        if args.exclude_unconverged:
+            for taut in tautomer_items:
+                for protomer in taut[1].protomers.values():
+                    if (
+                        protomer.mol is not None
+                        and protomer.mol.HasProp("peace_connectivity_mismatch")
+                        and protomer.mol.GetProp("peace_connectivity_mismatch").lower() == "true"
+                    ):
+                        excluded_unconverged_count += 1
+            _log(
+                "Excluding connectivity-mismatch protomers from Boltzmann weighting: "
+                f"count={excluded_unconverged_count}"
+            )
+        spec.assign_boltzmann_microstate_populations(
+            temperature_k=298.15,
+            exclude_connectivity_mismatch=bool(args.exclude_unconverged),
+        )
         f_zwit = spec.get_f_zwit()
         _log(f"Total predicted zwitterion fraction (f_zwit): {f_zwit:.5f}")
         for taut_idx, taut in tautomer_items:

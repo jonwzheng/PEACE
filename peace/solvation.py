@@ -126,7 +126,6 @@ def _formal_charge(mol: Chem.Mol) -> int:
 def _embed_conformers_rdkit_mmff94(
     mol: Chem.Mol,
     *,
-    n_confs: int = 500,
     random_seed: int = 42,
     mmff_max_iters: int = 1000,
 ) -> tuple[Chem.Mol, float, int]:
@@ -147,6 +146,8 @@ def _embed_conformers_rdkit_mmff94(
     params.numThreads = 0
     params.useExpTorsionAnglePrefs = False # better for liquid phase
 
+    n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
+    n_confs = min(100, 2 ** n_rotatable_bonds, 2000)
     conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
     if not conf_ids:
         raise RuntimeError("RDKit conformer embedding produced no conformers.")
@@ -522,6 +523,14 @@ def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_p
         input_edges = _all_atom_connectivity_signature(input_mol_with_hydrogens)
         opt_edges = _all_atom_connectivity_signature(mol_opt)
         if input_edges != opt_edges:
+            mol_opt.SetProp("peace_connectivity_mismatch", "true")
+            mol_opt.SetProp(
+                "peace_connectivity_mismatch_error",
+                (
+                    "Optimized structure connectivity differs from input mol. "
+                    f"Got: {sorted(opt_edges)}, Expected: {sorted(input_edges)}"
+                )[:4000],
+            )
             warnings.warn(
                 f"Optimized structure connectivity differs from input mol!! Please double-check the optimized structure. Got: {opt_edges}, Expected: {input_edges}",
                 RuntimeWarning,
@@ -531,6 +540,8 @@ def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_p
                 "WARN",
                 "optimized connectivity does not match input connectivity!!",
             )
+        else:
+            mol_opt.SetProp("peace_connectivity_mismatch", "false")
         protomer.mol = mol_opt
         _log_status(log_paths, "OK", f"updated protomer geometry from {xyz_path.name}")
         return xyz_path.read_text()

@@ -245,6 +245,7 @@ class Species:
         *,
         temperature_k: float = 298.15,
         energy_prop: str = "peace_solution_phase_free_energy_kcal_mol",
+        exclude_connectivity_mismatch: bool = False,
     ) -> pd.DataFrame:
         """
         Compute and assign Boltzmann populations across all protomers in all tautomers.
@@ -271,6 +272,12 @@ class Species:
         for taut_idx, tautomer in self.tautomers.items():
             for prot_idx, protomer in tautomer.protomers.items():
                 if protomer.mol is None or not protomer.mol.HasProp(energy_prop):
+                    continue
+                if (
+                    exclude_connectivity_mismatch
+                    and protomer.mol.HasProp("peace_connectivity_mismatch")
+                    and protomer.mol.GetProp("peace_connectivity_mismatch").lower() == "true"
+                ):
                     continue
                 try:
                     g_i = float(protomer.mol.GetProp(energy_prop))
@@ -340,9 +347,14 @@ class Species:
             "peace_solvation_free_energy_kcal_mol",
             "peace_gas_sp_energy_kcal_mol",
             "peace_frequency_contribution_kcal_mol",
+            "peace_rrho_contribution_kcal_mol",
             "peace_solution_phase_free_energy_kcal_mol",
             "peace_delta_g_kcal_mol",
             "peace_boltzmann_fraction",
+            "peace_workflow_status",
+            "peace_workflow_error",
+            "peace_connectivity_mismatch",
+#            "peace_connectivity_mismatch_error",
         ]
         for taut_idx, tautomer in self.tautomers.items():
             for prot_idx, protomer in tautomer.protomers.items():
