@@ -5,6 +5,7 @@ from peace import __version__
 from datetime import datetime
 import time
 from pathlib import Path
+from typing import Any, Optional
 
 def _build_cli_parser():
     import argparse
@@ -66,6 +67,12 @@ def _build_cli_parser():
         choices=["gxtb", "xtb"],
         help="Gas-phase SP source: 'gxtb' (driver SP, default) or 'xtb' (from Hessian output).",
     )
+    p.add_argument(
+        "--screen-threshold",
+        type=float,
+        default=15.0,
+        help="Exclude protomers from full post-screen optimization if screening delta exceeds energy threshold (kcal/mol).",
+    )
     return p
 
 
@@ -83,6 +90,12 @@ def _ts() -> str:
 
 def _log(message: str) -> None:
     print(f"[{_ts()}] {message}", flush=True)
+
+
+def _set_optional_double_prop(protomer, key: str, value: Optional[float]) -> None:
+    if protomer.mol is None or value is None:
+        return
+    protomer.mol.SetDoubleProp(key, float(value))
 
 
 def _header_banner() -> str:
@@ -148,7 +161,7 @@ if __name__ == "__main__":
             _log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)}: {prot.smiles}")
 
     if args.optimize:
-        from peace.solvation import run_protomer_solvation
+        from peace.solvation import run_protomer_solvation, run_protomer_screening
         import shutil
 
         scratch_root_path = Path(args.scratch_root)
@@ -165,7 +178,8 @@ if __name__ == "__main__":
                 )
         species_scratch.mkdir(parents=True, exist_ok=True)
 
-        _log("Optimization requested: starting per-protomer workflow")
+        _log(" *** SCREENING PROTOMERS *** ")
+        screening_records: list[tuple[int, int, Any, Optional[float]]] = []
         for taut_idx, taut in tautomer_items:
             protomer_items = list(taut.protomers.items())
             for prot_idx, protomer in protomer_items:
@@ -173,21 +187,110 @@ if __name__ == "__main__":
                     f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
                     f"protomer {prot_idx + 1}/{len(protomer_items)}"
                 )
-                _log(f"Optimizing {prefix}")
-                run_protomer_solvation(
+                _log(f"Screening {prefix}")
+                screening_result = run_protomer_screening(
                     protomer,
-                    protomer_id=str(prot_idx),
-                    scratch_root=species_scratch / f"tautomer_{taut_idx}",
+                    protomer_id=f"{prot_idx}_screen",
+                    scratch_root=species_scratch / f"tautomer_{taut_idx}" / "screening",
                     conformer_mode=args.conformer_mode,
                     external_xyz_path=args.external_xyz,
+                    opt_level=args.opt_level,
                     keep_scratch=bool(args.keep_scratch),
                     keep_logs=bool(args.keep_logs),
                     parse_solvation=args.parse_solvation,
-                    sp_energy=args.sp_energy,
                     dry_run=bool(args.dry_run),
-                    opt_level=args.opt_level,
                     progress_callback=lambda stage, prefix=prefix: _log(f"  [{prefix}] {stage}"),
                 )
+                screening_records.append(
+                    (
+                        taut_idx,
+                        prot_idx,
+                        protomer,
+                        screening_result.solution_phase_free_energy_kcal_mol,
+                    )
+                )
+
+        valid_screening = [row for row in screening_records if row[3] is not None]
+        min_screening_solution_energy = min((row[3] for row in valid_screening), default=None)
+        if min_screening_solution_energy is None:
+            _log("Screening did not produce any valid solution-phase energies; keeping all protomers for full optimization.")
+
+        protomers_to_optimize: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
+        screened_out: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
+        for taut_idx, prot_idx, protomer, screening_energy in screening_records:
+            screen_delta = None
+            if screening_energy is not None and min_screening_solution_energy is not None:
+                screen_delta = screening_energy - min_screening_solution_energy
+            if (
+                screen_delta is not None
+                and screen_delta > float(args.screen_threshold)
+            ):
+                screened_out.append((taut_idx, prot_idx, protomer, screening_energy, screen_delta))
+            else:
+                protomers_to_optimize.append((taut_idx, prot_idx, protomer, screening_energy, screen_delta))
+
+        _log(
+            "Screening finished: "
+            f"kept={len(protomers_to_optimize)} "
+            f"excluded={len(screened_out)} "
+            f"threshold={float(args.screen_threshold):.2f} kcal/mol"
+        )
+
+        _log(" *** SOLVATION STAGE (g-xTB on screened geometry) ***")
+        for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
+            protomer_items = list(spec.tautomers[taut_idx].protomers.items())
+            prefix = (
+                f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
+                f"protomer {prot_idx + 1}/{len(protomer_items)}"
+            )
+            _log(f"Optimizing {prefix}")
+            _log(f"  [{prefix}] reusing screening conformer geometry (conformer_mode=skip_search)")
+            run_protomer_solvation(
+                protomer,
+                protomer_id=str(prot_idx),
+                scratch_root=species_scratch / f"tautomer_{taut_idx}",
+                conformer_mode="skip_search",
+                external_xyz_path=args.external_xyz,
+                keep_scratch=bool(args.keep_scratch),
+                keep_logs=bool(args.keep_logs),
+                parse_solvation=args.parse_solvation,
+                sp_energy=args.sp_energy,
+                run_geometry_optimization=False,
+                recompute_solvation=False,
+                recompute_frequencies=False,
+                reuse_screening_terms=True,
+                dry_run=bool(args.dry_run),
+                opt_level=args.opt_level,
+                progress_callback=lambda stage, prefix=prefix: _log(f"  [{prefix}] {stage}"),
+            )
+
+        optimized_energies = [
+            protomer.mol.GetDoubleProp("peace_solution_phase_free_energy_kcal_mol")
+            for _taut_idx, _prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize
+            if protomer.mol is not None and protomer.mol.HasProp("peace_solution_phase_free_energy_kcal_mol")
+        ]
+        min_postopt_solution_energy = min(optimized_energies) if optimized_energies else None
+        if min_postopt_solution_energy is None:
+            _log("No valid post-optimization solution energies found to backfill screened-out protomers.")
+
+        for taut_idx, prot_idx, protomer, screening_energy, screen_delta in screened_out:
+            if protomer.mol is None:
+                continue
+            protomer.mol.SetProp("peace_screening_skipped_postopt", "true")
+            _set_optional_double_prop(protomer, "peace_screening_solution_phase_free_energy_kcal_mol", screening_energy)
+            _set_optional_double_prop(protomer, "peace_screening_delta_kcal_mol", screen_delta)
+            placeholder_energy = None
+            if min_postopt_solution_energy is not None and screen_delta is not None:
+                placeholder_energy = min_postopt_solution_energy + screen_delta
+            _set_optional_double_prop(protomer, "peace_screening_placeholder_solution_phase_free_energy_kcal_mol", placeholder_energy)
+            _set_optional_double_prop(protomer, "peace_solution_phase_free_energy_kcal_mol", placeholder_energy)
+            protomer.mol.SetProp("peace_workflow_status", "screened_out_after_screening_step")
+            _log(
+                "Screened out protomer "
+                f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
+                f"screen_delta={screen_delta} "
+                f"placeholder_solution_energy={placeholder_energy}"
+            )
         _log(f"Optimization outputs saved under: {species_scratch}")
 
         _log("Calculating Boltzmann populations")

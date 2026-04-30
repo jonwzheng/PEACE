@@ -296,6 +296,16 @@ class SolvationWorkflowResult:
     stdout_tail: str
 
 
+@dataclass(frozen=True)
+class ScreeningWorkflowResult:
+    conformer_energy_kcal_mol: Optional[float]
+    solvation_free_energy_kcal_mol: Optional[float]
+    gas_sp_energy_kcal_mol: Optional[float]
+    rrho_contribution_kcal_mol: Optional[float]
+    solution_phase_free_energy_kcal_mol: Optional[float]
+    stdout_tail: str
+
+
 @dataclass
 class SolvationScratchContext:
     scratch_root: Path
@@ -683,7 +693,6 @@ def _run_hessian_and_parse_energies(
 
 
 def _compute_solution_phase_energy(
-    gas_sp_energy_h: Optional[float],
     gas_sp_energy_kcal_mol: Optional[float],
     solvation_free_energy_kcal_mol: Optional[float],
     rrho_contribution_kcal_mol: Optional[float],
@@ -691,7 +700,7 @@ def _compute_solution_phase_energy(
 ) -> Optional[float]:
     solution_phase_free_energy_kcal_mol = None
     if (
-        gas_sp_energy_h is not None
+        gas_sp_energy_kcal_mol is not None
         and solvation_free_energy_kcal_mol is not None
         and rrho_contribution_kcal_mol is not None
     ):
@@ -805,6 +814,190 @@ def _cleanup_scratch_dir(
         shutil.rmtree(scratch_dir, ignore_errors=True) # TODO: for some reason this is not actually working
 
 
+def run_protomer_screening(
+    protomer: Protomer,
+    *,
+    protomer_id: int | str = 0,
+    scratch_root: str | Path = "./peace_scratch_solvation",
+    conformer_mode: Literal["mmff94", "external_xyz", "skip_search"] = "mmff94",
+    external_xyz_path: Optional[str | Path] = None,
+    charge_override: Optional[int] = None,
+    solvent: Literal["water"] = "water",
+    gfn: int = 2,
+    parse_solvation: Literal["g", "e"] = "g",
+    opt_level: Literal["loose", "tight", "vtight"] = "loose",
+    xtb_executable: str = "xtb",
+    keep_scratch: bool = False,
+    keep_logs: bool = False,
+    keep_scratch_on_failure: bool = False,
+    dry_run: bool = False,
+    timeout_s: Optional[int] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> ScreeningWorkflowResult:
+    """
+    Lightweight pre-screening workflow for protomer pruning.
+
+    Steps:
+    1) Build/choose conformer geometry.
+    2) Run xTB geometry optimization in solvent.
+    3) Run xTB CPCM-X single-point solvation on optimized geometry.
+    4) Run xTB Hessian on optimized geometry to get gas SP + RRHO term.
+    5) Compute screening solution-phase free energy (without g-xTB).
+    """
+    def _progress(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
+    scratch_context = _create_scratch_context(scratch_root, protomer_id)
+    scratch_dir = scratch_context.scratch_dir
+    log_paths = scratch_context.log_paths
+
+    if protomer.mol is None:
+        raise ValueError("Protomer does not have mol; cannot run screening workflow.")
+    charge = int(charge_override) if charge_override is not None else _formal_charge(protomer.mol)
+    _log_status(
+        log_paths,
+        "START",
+        f"screening protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode}",
+    )
+    _progress("preparing conformer")
+
+    conformer_energy_kcal_mol: Optional[float] = None
+    solvation_free_energy_kcal_mol: Optional[float] = None
+    gas_sp_energy_kcal_mol: Optional[float] = None
+    rrho_contribution_kcal_mol: Optional[float] = None
+    solution_phase_free_energy_kcal_mol: Optional[float] = None
+
+    try:
+        if dry_run:
+            _progress("dry run enabled; skipping screening workflow")
+            _log_status(log_paths, "SKIP", "dry_run enabled; skipping screening steps")
+            return ScreeningWorkflowResult(
+                conformer_energy_kcal_mol=None,
+                solvation_free_energy_kcal_mol=None,
+                gas_sp_energy_kcal_mol=None,
+                rrho_contribution_kcal_mol=None,
+                solution_phase_free_energy_kcal_mol=None,
+                stdout_tail="dry_run; skipped screening steps.",
+            )
+
+        mol, conformer_energy_kcal_mol = _prepare_protomer_conformer(
+            protomer,
+            conformer_mode=conformer_mode,
+            external_xyz_path=external_xyz_path,
+            log_paths=log_paths,
+        )
+        input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
+        _progress("optimizing screening geometry")
+        xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = _run_xtb_optimization(
+            mol=mol,
+            scratch_dir=scratch_dir,
+            input_xyz_path=input_xyz_path,
+            xtb_executable=xtb_executable,
+            solvent=solvent,
+            opt_level=opt_level,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+        )
+        _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
+
+        _progress("computing screening solvation single point")
+        solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
+            scratch_dir=scratch_dir,
+            xtbopt_xyz_path=xtbopt_xyz_path,
+            xtb_executable=xtb_executable,
+            solvent=solvent,
+            charge=charge,
+            gfn=gfn,
+            parse_solvation=parse_solvation,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+        )
+
+        _progress("computing screening frequencies")
+        gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _ = _run_hessian_and_parse_energies(
+            scratch_dir=scratch_dir,
+            xtbopt_xyz_path=xtbopt_xyz_path,
+            xtb_executable=xtb_executable,
+            charge=charge,
+            gfn=gfn,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+        )
+
+        solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
+            gas_sp_energy_kcal_mol,
+            solvation_free_energy_kcal_mol,
+            rrho_contribution_kcal_mol,
+            log_paths,
+        )
+        _set_mol_prop_double(protomer.mol, "peace_screening_conformer_energy_kcal_mol", conformer_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "peace_screening_solvation_free_energy_kcal_mol", solvation_free_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "peace_screening_gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "peace_screening_rrho_contribution_kcal_mol", rrho_contribution_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "peace_screening_solution_phase_free_energy_kcal_mol", solution_phase_free_energy_kcal_mol)
+        _progress("finished screening workflow")
+
+    except Exception as e:
+        _progress(f"failed screening: {e}")
+        _log_status(log_paths, "FAIL", f"screening exception for protomer_id={protomer_id}: {e}")
+        warnings.warn(
+            f"Screening workflow failed for protomer_id={protomer_id}: {e}",
+            RuntimeWarning,
+        )
+        if protomer.mol is not None:
+            _set_mol_prop_str(protomer.mol, "peace_screening_error", str(e)[:4000])
+        _preserve_output_files(scratch_dir, keep_logs=keep_logs)
+        keep = keep_scratch or keep_scratch_on_failure
+        _cleanup_scratch_dir(
+            scratch_dir,
+            keep_scratch=keep,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            success=False,
+        )
+        return ScreeningWorkflowResult(
+            conformer_energy_kcal_mol=conformer_energy_kcal_mol,
+            solvation_free_energy_kcal_mol=None,
+            gas_sp_energy_kcal_mol=None,
+            rrho_contribution_kcal_mol=None,
+            solution_phase_free_energy_kcal_mol=None,
+            stdout_tail=str(e)[-4000:],
+        )
+
+    _preserve_output_files(scratch_dir, keep_logs=keep_logs)
+    _cleanup_scratch_dir(
+        scratch_dir,
+        keep_scratch=keep_scratch,
+        dry_run=dry_run,
+        log_paths=log_paths,
+        success=True,
+    )
+    _log_status(
+        log_paths,
+        "SUCCESS",
+        "screening complete "
+        f"gas={gas_sp_energy_kcal_mol} solv={solvation_free_energy_kcal_mol} "
+        f"freq={rrho_contribution_kcal_mol} solution={solution_phase_free_energy_kcal_mol}",
+    )
+    _progress("screening success")
+
+    return ScreeningWorkflowResult(
+        conformer_energy_kcal_mol=conformer_energy_kcal_mol,
+        solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
+        gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
+        rrho_contribution_kcal_mol=rrho_contribution_kcal_mol,
+        solution_phase_free_energy_kcal_mol=solution_phase_free_energy_kcal_mol,
+        stdout_tail=(
+            f"screening ok; parsed values: "
+            f"solv={solvation_free_energy_kcal_mol}, gas={gas_sp_energy_kcal_mol}"
+        )[-4000:],
+    )
+
+
 def run_protomer_solvation(
     protomer: Protomer,
     *,
@@ -819,6 +1012,10 @@ def run_protomer_solvation(
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     sp_energy: Literal["gxtb", "xtb"] = "gxtb",
+    run_geometry_optimization: bool = False,
+    recompute_solvation: bool = False,
+    recompute_frequencies: bool = False,
+    reuse_screening_terms: bool = True,
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -829,12 +1026,11 @@ def run_protomer_solvation(
     """
     Solvates a protomer and gets the solution-phase energy
 
-    Steps:
-    1) Generate conformers (RDKit/MMFF94 by default) and keep the lowest MMFF energy.
-    2) xTB optimization with implicit solvent. (g-xTB not supported yet!)
-    3) CPCM-X SP solvation energy using GFN2-xTB.
-    4) Gas-phase SP from g-xTB driver (default) or xTB Hessian output.
-    5) Gas-phase frequency calculation using GFN2-xTB (--hess).
+    Default staged behavior:
+    1) Reuse existing pre-screened geometry and terms if present.
+    2) Run g-xTB gas-phase SP on current geometry.
+    3) Combine gas SP + RRHO + solvation into final solution-phase free energy.
+    Optional flags allow geometry optimization and/or recomputing solvation and frequency terms.
     """
     def _progress(message: str) -> None:
         if progress_callback is not None:
@@ -891,52 +1087,64 @@ def run_protomer_solvation(
         )
 
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
-        _progress("optimizing geometry")
+        active_xyz_path = input_xyz_path
+        gas_sp_hess_kcal_mol: Optional[float] = None
 
-        xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_xtb_optimization(
-            mol=mol,
-            scratch_dir=scratch_dir,
-            input_xyz_path=input_xyz_path,
-            xtb_executable=xtb_executable,
-            solvent=solvent,
-            opt_level=opt_level,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-        )
+        if run_geometry_optimization:
+            _progress("optimizing geometry")
+            xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = _run_xtb_optimization(
+                mol=mol,
+                scratch_dir=scratch_dir,
+                input_xyz_path=input_xyz_path,
+                xtb_executable=xtb_executable,
+                solvent=solvent,
+                opt_level=opt_level,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+            )
+            active_xyz_path = xtbopt_xyz_path
+            xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
 
-        xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
-        _progress("computing solvation single point")
+        if reuse_screening_terms and protomer.mol.HasProp("peace_screening_solvation_free_energy_kcal_mol"):
+            solvation_free_energy_kcal_mol = protomer.mol.GetDoubleProp("peace_screening_solvation_free_energy_kcal_mol")
+        if reuse_screening_terms and protomer.mol.HasProp("peace_screening_rrho_contribution_kcal_mol"):
+            rrho_contribution_kcal_mol = protomer.mol.GetDoubleProp("peace_screening_rrho_contribution_kcal_mol")
+        if reuse_screening_terms and protomer.mol.HasProp("peace_screening_gas_sp_energy_kcal_mol"):
+            gas_sp_hess_kcal_mol = protomer.mol.GetDoubleProp("peace_screening_gas_sp_energy_kcal_mol")
 
-        solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
-            scratch_dir=scratch_dir,
-            xtbopt_xyz_path=xtbopt_xyz_path,
-            xtb_executable=xtb_executable,
-            solvent=solvent,
-            charge=charge,
-            gfn=gfn,
-            parse_solvation=parse_solvation,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-        )
+        if recompute_solvation or solvation_free_energy_kcal_mol is None:
+            _progress("computing solvation single point")
+            solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
+                scratch_dir=scratch_dir,
+                xtbopt_xyz_path=active_xyz_path,
+                xtb_executable=xtb_executable,
+                solvent=solvent,
+                charge=charge,
+                gfn=gfn,
+                parse_solvation=parse_solvation,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+            )
 
-        _progress("computing frequencies")
-        gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, gas_sp_hess_h = _run_hessian_and_parse_energies(
-            scratch_dir=scratch_dir,
-            xtbopt_xyz_path=xtbopt_xyz_path,
-            xtb_executable=xtb_executable,
-            charge=charge,
-            gfn=gfn,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-        )
+        if recompute_frequencies or rrho_contribution_kcal_mol is None or gas_sp_hess_kcal_mol is None:
+            _progress("computing frequencies")
+            gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_hess_h = _run_hessian_and_parse_energies(
+                scratch_dir=scratch_dir,
+                xtbopt_xyz_path=active_xyz_path,
+                xtb_executable=xtb_executable,
+                charge=charge,
+                gfn=gfn,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+            )
         if sp_energy == "gxtb":
             _progress("computing gas-phase single point")
-            gas_sp_energy_kcal_mol, gas_sp_energy_h = _run_gxtb_single_point_energy(
+            gas_sp_energy_kcal_mol, _ = _run_gxtb_single_point_energy(
                 scratch_dir=scratch_dir,
-                xtbopt_xyz_path=xtbopt_xyz_path,
+                xtbopt_xyz_path=active_xyz_path,
                 xtb_executable=xtb_executable,
                 charge=charge,
                 timeout_s=timeout_s,
@@ -944,12 +1152,11 @@ def run_protomer_solvation(
                 log_paths=log_paths,
             )
         elif sp_energy == "xtb":
-            gas_sp_energy_kcal_mol, gas_sp_energy_h = gas_sp_hess_kcal_mol, gas_sp_hess_h
+            gas_sp_energy_kcal_mol = gas_sp_hess_kcal_mol
         else:
             raise ValueError(f"Unknown sp_energy mode: {sp_energy}")
 
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
-            gas_sp_energy_h,
             gas_sp_energy_kcal_mol,
             solvation_free_energy_kcal_mol,
             rrho_contribution_kcal_mol,
