@@ -180,8 +180,8 @@ class Tautomer:
         # show also the microstate populations if available
         legends = []
         for k, v in self.protomers.items():
-            if v.mol.HasProp('peace_boltzmann_fraction'):
-                f_i = f"f_i: {float(v.mol.GetProp('peace_boltzmann_fraction')):.4f}"
+            if v.mol.HasProp('boltzmann_fraction'):
+                f_i = f"f_i: {float(v.mol.GetProp('boltzmann_fraction')):.4f}"
             else:
                 f_i = ""
             legends.append(f"ID: {k} | SMILES: {v.smiles}\n {f_i}")
@@ -244,7 +244,7 @@ class Species:
         self,
         *,
         temperature_k: float = 298.15,
-        energy_prop: str = "peace_solution_phase_free_energy_kcal_mol",
+        energy_prop: str = "solution_phase_free_energy_kcal_mol",
         exclude_connectivity_mismatch: bool = False,
     ) -> pd.DataFrame:
         """
@@ -258,8 +258,8 @@ class Species:
         Energies are read from `energy_prop` on each protomer mol.
         The lowest-energy protomer across ALL tautomers is used as reference.
         Assigned properties:
-            - peace_delta_g_kcal_mol
-            - peace_boltzmann_fraction
+            - delta_g_kcal_mol
+            - boltzmann_fraction
         """
         if temperature_k <= 0:
             raise ValueError("temperature_k must be > 0.")
@@ -275,8 +275,8 @@ class Species:
                     continue
                 if (
                     exclude_connectivity_mismatch
-                    and protomer.mol.HasProp("peace_connectivity_mismatch")
-                    and protomer.mol.GetProp("peace_connectivity_mismatch").lower() == "true"
+                    and protomer.mol.HasProp("connectivity_mismatch")
+                    and protomer.mol.GetProp("connectivity_mismatch").lower() == "true"
                 ):
                     continue
                 try:
@@ -311,8 +311,8 @@ class Species:
         for idx, (taut_idx, prot_idx, protomer, g_i) in enumerate(entries):
             delta_g = g_i - g_ref
             frac = float(weights[idx] / partition_q) if partition_q > 0 else 0.0
-            protomer.mol.SetDoubleProp("peace_delta_g_kcal_mol", float(delta_g))
-            protomer.mol.SetDoubleProp("peace_boltzmann_fraction", float(frac))
+            protomer.mol.SetDoubleProp("delta_g_kcal_mol", float(delta_g))
+            protomer.mol.SetDoubleProp("boltzmann_fraction", float(frac))
             rows.append(
                 {
                     "tautomer_id": taut_idx,
@@ -327,7 +327,7 @@ class Species:
         """
         Return total zwitterion fraction from assigned Boltzmann populations.
 
-        This sums `peace_boltzmann_fraction` over all protomers tagged as zwitterions.
+        This sums `boltzmann_fraction` over all protomers tagged as zwitterions.
         """
         f_zwit = 0.0
         for tautomer in self.tautomers.values():
@@ -335,26 +335,26 @@ class Species:
                 if (
                     protomer.is_zwitterion
                     and protomer.mol is not None
-                    and protomer.mol.HasProp("peace_boltzmann_fraction")
+                    and protomer.mol.HasProp("boltzmann_fraction")
                 ):
-                    f_zwit += float(protomer.mol.GetProp("peace_boltzmann_fraction"))
+                    f_zwit += float(protomer.mol.GetProp("boltzmann_fraction"))
         return float(f_zwit)
         
     def to_dataframe(self):
         rows = []
         solvation_props = [
-            "peace_conformer_energy_kcal_mol",
-            "peace_solvation_free_energy_kcal_mol",
-            "peace_gas_sp_energy_kcal_mol",
-            "peace_frequency_contribution_kcal_mol",
-            "peace_rrho_contribution_kcal_mol",
-            "peace_solution_phase_free_energy_kcal_mol",
-            "peace_delta_g_kcal_mol",
-            "peace_boltzmann_fraction",
-            "peace_workflow_status",
-            "peace_workflow_error",
-            "peace_connectivity_mismatch",
-#            "peace_connectivity_mismatch_error",
+            "conformer_energy_kcal_mol",
+            "solvation_free_energy_kcal_mol",
+            "gas_sp_energy_kcal_mol",
+            "frequency_contribution_kcal_mol",
+            "rrho_contribution_kcal_mol",
+            "solution_phase_free_energy_kcal_mol",
+            "delta_g_kcal_mol",
+            "boltzmann_fraction",
+            "workflow_status",
+            "workflow_error",
+            "connectivity_mismatch",
+#            "connectivity_mismatch_error",
         ]
         for taut_idx, tautomer in self.tautomers.items():
             for prot_idx, protomer in tautomer.protomers.items():

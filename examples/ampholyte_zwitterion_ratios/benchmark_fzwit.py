@@ -16,13 +16,13 @@ def _slugify(value: str) -> str:
 
 def _compute_predicted_f_zwit(results_csv: Path) -> float:
     df = pd.read_csv(results_csv)
-    if "is_zwitterion" not in df.columns or "peace_boltzmann_fraction" not in df.columns:
+    if "is_zwitterion" not in df.columns or "boltzmann_fraction" not in df.columns:
         raise ValueError(
-            f"Expected columns 'is_zwitterion' and 'peace_boltzmann_fraction' in {results_csv}."
+            f"Expected columns 'is_zwitterion' and 'boltzmann_fraction' in {results_csv}."
         )
 
     zwit = df["is_zwitterion"].astype(str).str.lower().isin(["true", "1", "yes"])
-    fractions = pd.to_numeric(df["peace_boltzmann_fraction"], errors="coerce").fillna(0.0)
+    fractions = pd.to_numeric(df["boltzmann_fraction"], errors="coerce").fillna(0.0)
     return float(fractions[zwit].sum())
 
 

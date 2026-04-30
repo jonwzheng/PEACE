@@ -354,7 +354,7 @@ def _prepare_protomer_conformer(
         mol_best, best_energy, best_conf_id = _embed_conformers_rdkit_mmff94(mol)
         conformer_energy_kcal_mol = best_energy
         protomer.mol = mol_best
-        protomer.mol.SetProp("peace_conformer_mode", "mmff94")
+        protomer.mol.SetProp("conformer_mode", "mmff94")
         _log_status(
             log_paths,
             "OK",
@@ -373,7 +373,7 @@ def _prepare_protomer_conformer(
         protomer.mol = mol
         if getattr(protomer, "input_mol", None) is None:
             protomer.input_mol = Chem.Mol(mol)
-        protomer.mol.SetProp("peace_conformer_mode", "external_xyz")
+        protomer.mol.SetProp("conformer_mode", "external_xyz")
         _log_status(log_paths, "OK", f"loaded external xyz from {external_xyz_path}")
         return protomer.mol, conformer_energy_kcal_mol
 
@@ -383,7 +383,7 @@ def _prepare_protomer_conformer(
         protomer.mol = mol
         if getattr(protomer, "input_mol", None) is None:
             protomer.input_mol = Chem.Mol(mol)
-        protomer.mol.SetProp("peace_conformer_mode", "skip_search")
+        protomer.mol.SetProp("conformer_mode", "skip_search")
         _log_status(log_paths, "OK", "using existing conformer on protomer.mol")
         return protomer.mol, conformer_energy_kcal_mol
 
@@ -523,9 +523,9 @@ def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_p
         input_edges = _all_atom_connectivity_signature(input_mol_with_hydrogens)
         opt_edges = _all_atom_connectivity_signature(mol_opt)
         if input_edges != opt_edges:
-            mol_opt.SetProp("peace_connectivity_mismatch", "true")
+            mol_opt.SetProp("connectivity_mismatch", "true")
             mol_opt.SetProp(
-                "peace_connectivity_mismatch_error",
+                "connectivity_mismatch_error",
                 (
                     "Optimized structure connectivity differs from input mol. "
                     f"Got: {sorted(opt_edges)}, Expected: {sorted(input_edges)}"
@@ -541,7 +541,7 @@ def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_p
                 "optimized connectivity does not match input connectivity!!",
             )
         else:
-            mol_opt.SetProp("peace_connectivity_mismatch", "false")
+            mol_opt.SetProp("connectivity_mismatch", "false")
         protomer.mol = mol_opt
         _log_status(log_paths, "OK", f"updated protomer geometry from {xyz_path.name}")
         return xyz_path.read_text()
@@ -745,18 +745,18 @@ def _persist_protomer_results(
     rrho_contribution_kcal_mol: Optional[float],
     solution_phase_free_energy_kcal_mol: Optional[float],
 ) -> None:
-    protomer.mol.SetProp("peace_charge", str(charge))
-    _set_mol_prop_double(protomer.mol, "peace_conformer_energy_kcal_mol", conformer_energy_kcal_mol)
-    _set_mol_prop_double(protomer.mol, "peace_solvation_free_energy_kcal_mol", solvation_free_energy_kcal_mol)
-    _set_mol_prop_double(protomer.mol, "peace_gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
+    protomer.mol.SetProp("charge", str(charge))
+    _set_mol_prop_double(protomer.mol, "conformer_energy_kcal_mol", conformer_energy_kcal_mol)
+    _set_mol_prop_double(protomer.mol, "solvation_free_energy_kcal_mol", solvation_free_energy_kcal_mol)
+    _set_mol_prop_double(protomer.mol, "gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
     _set_mol_prop_double(
         protomer.mol,
-        "peace_rrho_contribution_kcal_mol",
+        "rrho_contribution_kcal_mol",
         rrho_contribution_kcal_mol,
     )
     _set_mol_prop_double(
         protomer.mol,
-        "peace_solution_phase_free_energy_kcal_mol",
+        "solution_phase_free_energy_kcal_mol",
         solution_phase_free_energy_kcal_mol,
     )
 
@@ -829,7 +829,7 @@ def run_protomer_screening(
     protomer: Protomer,
     *,
     protomer_id: int | str = 0,
-    scratch_root: str | Path = "./peace_scratch_solvation",
+    scratch_root: str | Path = "./scratch_solvation",
     conformer_mode: Literal["mmff94", "external_xyz", "skip_search"] = "mmff94",
     external_xyz_path: Optional[str | Path] = None,
     charge_override: Optional[int] = None,
@@ -945,11 +945,11 @@ def run_protomer_screening(
             rrho_contribution_kcal_mol,
             log_paths,
         )
-        _set_mol_prop_double(protomer.mol, "peace_screening_conformer_energy_kcal_mol", conformer_energy_kcal_mol)
-        _set_mol_prop_double(protomer.mol, "peace_screening_solvation_free_energy_kcal_mol", solvation_free_energy_kcal_mol)
-        _set_mol_prop_double(protomer.mol, "peace_screening_gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
-        _set_mol_prop_double(protomer.mol, "peace_screening_rrho_contribution_kcal_mol", rrho_contribution_kcal_mol)
-        _set_mol_prop_double(protomer.mol, "peace_screening_solution_phase_free_energy_kcal_mol", solution_phase_free_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "screening_conformer_energy_kcal_mol", conformer_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "screening_solvation_free_energy_kcal_mol", solvation_free_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "screening_gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "screening_rrho_contribution_kcal_mol", rrho_contribution_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "screening_solution_phase_free_energy_kcal_mol", solution_phase_free_energy_kcal_mol)
         _progress("finished screening workflow")
 
     except Exception as e:
@@ -960,7 +960,7 @@ def run_protomer_screening(
             RuntimeWarning,
         )
         if protomer.mol is not None:
-            _set_mol_prop_str(protomer.mol, "peace_screening_error", str(e)[:4000])
+            _set_mol_prop_str(protomer.mol, "screening_error", str(e)[:4000])
         _preserve_output_files(scratch_dir, keep_logs=keep_logs)
         keep = keep_scratch or keep_scratch_on_failure
         _cleanup_scratch_dir(
@@ -1013,7 +1013,7 @@ def run_protomer_solvation(
     protomer: Protomer,
     *,
     protomer_id: int | str = 0,
-    scratch_root: str | Path = "./peace_scratch_solvation",
+    scratch_root: str | Path = "./scratch_solvation",
     conformer_mode: Literal["mmff94", "external_xyz", "skip_search"] = "mmff94",
     external_xyz_path: Optional[str | Path] = None,
     charge_override: Optional[int] = None,
@@ -1076,10 +1076,10 @@ def run_protomer_solvation(
             _log_status(log_paths, "SKIP", "dry_run enabled; skipping xTB/g-xTB steps")
             _set_mol_prop_double(
                 protomer.mol,
-                "peace_conformer_energy_kcal_mol",
+                "conformer_energy_kcal_mol",
                 conformer_energy_kcal_mol,
             )
-            protomer.mol.SetProp("peace_charge", str(charge))
+            protomer.mol.SetProp("charge", str(charge))
             return SolvationWorkflowResult(
                 conformer_energy_kcal_mol=conformer_energy_kcal_mol,
                 xtb_optimized_xyz=None,
@@ -1117,12 +1117,12 @@ def run_protomer_solvation(
             active_xyz_path = xtbopt_xyz_path
             xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
 
-        if reuse_screening_terms and protomer.mol.HasProp("peace_screening_solvation_free_energy_kcal_mol"):
-            solvation_free_energy_kcal_mol = protomer.mol.GetDoubleProp("peace_screening_solvation_free_energy_kcal_mol")
-        if reuse_screening_terms and protomer.mol.HasProp("peace_screening_rrho_contribution_kcal_mol"):
-            rrho_contribution_kcal_mol = protomer.mol.GetDoubleProp("peace_screening_rrho_contribution_kcal_mol")
-        if reuse_screening_terms and protomer.mol.HasProp("peace_screening_gas_sp_energy_kcal_mol"):
-            gas_sp_hess_kcal_mol = protomer.mol.GetDoubleProp("peace_screening_gas_sp_energy_kcal_mol")
+        if reuse_screening_terms and protomer.mol.HasProp("screening_solvation_free_energy_kcal_mol"):
+            solvation_free_energy_kcal_mol = protomer.mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")
+        if reuse_screening_terms and protomer.mol.HasProp("screening_rrho_contribution_kcal_mol"):
+            rrho_contribution_kcal_mol = protomer.mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")
+        if reuse_screening_terms and protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol"):
+            gas_sp_hess_kcal_mol = protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
 
         if recompute_solvation or solvation_free_energy_kcal_mol is None:
             _progress("computing solvation single point")
@@ -1182,7 +1182,7 @@ def run_protomer_solvation(
             f"Solvation workflow failed for protomer_id={protomer_id}: {e}",
             RuntimeWarning,
         )
-        _set_mol_prop_str(protomer.mol, "peace_workflow_error", str(e)[:4000] if protomer.mol is not None else str(e))
+        _set_mol_prop_str(protomer.mol, "workflow_error", str(e)[:4000] if protomer.mol is not None else str(e))
 
         solvation_free_energy_kcal_mol = None
         gas_sp_energy_kcal_mol = None
@@ -1255,7 +1255,7 @@ def run_tautomer_solvation(
     *,
     tautomer_id: int | str = 0,
     species_key: Optional[str] = None,
-    scratch_root: str | Path = "./peace_scratch_solvation",
+    scratch_root: str | Path = "./scratch_solvation",
     **kwargs,
 ) -> dict[int | str, SolvationWorkflowResult]:
     """
@@ -1278,7 +1278,7 @@ def run_tautomer_solvation(
 def run_species_solvation(
     species: Species,
     *,
-    scratch_root: str | Path = "./peace_scratch_solvation",
+    scratch_root: str | Path = "./scratch_solvation",
     override_solvation: bool = False,
     **kwargs,
 ) -> dict[int | str, dict[int | str, SolvationWorkflowResult]]:
@@ -1328,7 +1328,7 @@ def _build_cli_parser():
         choices=["mmff94", "external_xyz", "skip_search"],
     )
     p.add_argument("--charge", type=int, default=None, help="Override formal charge.")
-    p.add_argument("--scratch-root", type=str, default="./peace_scratch_solvation")
+    p.add_argument("--scratch-root", type=str, default="./scratch_solvation")
     p.add_argument(
         "--xtb-executable",
         type=str,
@@ -1391,11 +1391,11 @@ def main_cli(argv: Optional[list[str]] = None) -> int:
     # Print a minimal summary of what got attached to the mol.
     # RDKit may not have all props if parsing failed.
     summary_keys = [
-        "peace_solution_phase_free_energy_kcal_mol",
-        "peace_solvation_free_energy_kcal_mol",
-        "peace_gas_sp_energy_kcal_mol",
-        "peace_rrho_contribution_kcal_mol",
-        "peace_conformer_energy_kcal_mol",
+        "solution_phase_free_energy_kcal_mol",
+        "solvation_free_energy_kcal_mol",
+        "gas_sp_energy_kcal_mol",
+        "rrho_contribution_kcal_mol",
+        "conformer_energy_kcal_mol",
     ]
     for k in summary_keys:
         if protomer.mol.HasProp(k):

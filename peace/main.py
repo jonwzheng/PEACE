@@ -270,9 +270,9 @@ if __name__ == "__main__":
             )
 
         optimized_energies = [
-            protomer.mol.GetDoubleProp("peace_solution_phase_free_energy_kcal_mol")
+            protomer.mol.GetDoubleProp("solution_phase_free_energy_kcal_mol")
             for _taut_idx, _prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize
-            if protomer.mol is not None and protomer.mol.HasProp("peace_solution_phase_free_energy_kcal_mol")
+            if protomer.mol is not None and protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
         ]
         min_postopt_solution_energy = min(optimized_energies) if optimized_energies else None
         if min_postopt_solution_energy is None:
@@ -281,15 +281,15 @@ if __name__ == "__main__":
         for taut_idx, prot_idx, protomer, screening_energy, screen_delta in screened_out:
             if protomer.mol is None:
                 continue
-            protomer.mol.SetProp("peace_screening_skipped_postopt", "true")
-            _set_optional_double_prop(protomer, "peace_screening_solution_phase_free_energy_kcal_mol", screening_energy)
-            _set_optional_double_prop(protomer, "peace_screening_delta_kcal_mol", screen_delta)
+            protomer.mol.SetProp("screening_skipped_postopt", "true")
+            _set_optional_double_prop(protomer, "screening_solution_phase_free_energy_kcal_mol", screening_energy)
+            _set_optional_double_prop(protomer, "screening_delta_kcal_mol", screen_delta)
             placeholder_energy = None
             if min_postopt_solution_energy is not None and screen_delta is not None:
                 placeholder_energy = min_postopt_solution_energy + screen_delta
-            _set_optional_double_prop(protomer, "peace_screening_placeholder_solution_phase_free_energy_kcal_mol", placeholder_energy)
-            _set_optional_double_prop(protomer, "peace_solution_phase_free_energy_kcal_mol", placeholder_energy)
-            protomer.mol.SetProp("peace_workflow_status", "screened_out")
+            _set_optional_double_prop(protomer, "screening_placeholder_solution_phase_free_energy_kcal_mol", placeholder_energy)
+            _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
+            protomer.mol.SetProp("workflow_status", "screened_out")
             _log(
                 "Screened out protomer "
                 f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
@@ -305,8 +305,8 @@ if __name__ == "__main__":
                 for protomer in taut[1].protomers.values():
                     if (
                         protomer.mol is not None
-                        and protomer.mol.HasProp("peace_connectivity_mismatch")
-                        and protomer.mol.GetProp("peace_connectivity_mismatch").lower() == "true"
+                        and protomer.mol.HasProp("connectivity_mismatch")
+                        and protomer.mol.GetProp("connectivity_mismatch").lower() == "true"
                     ):
                         excluded_unconverged_count += 1
             _log(
@@ -323,8 +323,8 @@ if __name__ == "__main__":
             _log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
             for prot_idx, protomer in taut.protomers.items():
                 frac = (
-                    protomer.mol.GetProp("peace_boltzmann_fraction")
-                    if protomer.mol is not None and protomer.mol.HasProp("peace_boltzmann_fraction")
+                    protomer.mol.GetProp("boltzmann_fraction")
+                    if protomer.mol is not None and protomer.mol.HasProp("boltzmann_fraction")
                     else "N/A"
                 )
                 _log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)} ({protomer.smiles}): {frac}")
