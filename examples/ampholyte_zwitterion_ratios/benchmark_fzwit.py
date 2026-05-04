@@ -74,7 +74,7 @@ def main() -> None:
             "peace.main",
             "--smiles",
             smiles,
-            "--optimize",
+            "--solvation",
             "--override-solvation",
             "--scratch-root",
             str(scratch_root),
