@@ -17,10 +17,6 @@ from .protomer import Protomer, Species, Tautomer
 
 HARTREE_TO_KCAL_MOL = 627.5094740631
 
-# RDKit molecule property: path to preserved xtbopt.xyz (post-optimization geometry on disk).
-PEACE_XTB_OPTIMIZED_XYZ_PATH = "peace_xtb_optimized_xyz_path"
-
-
 def _append_log(log_path: Path, message: str) -> None:
     timestamp = datetime.now().isoformat(timespec="seconds")
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,55 +126,6 @@ def _mol_h_to_orca_coord_lines(mol: Chem.Mol, *, conf_id: int = 0) -> str:
     return "\n".join(lines)
 
 
-def _read_raw_xyz_coord_lines_for_orca(xyz_path: Path) -> str:
-    """
-    Parse an xTB-/RDKit-style xyz file (natoms, comment line, then natoms lines of
-    El x y z) and return ORCA-style coordinate text (no count/comment lines).
-    Uses the file as written by the optimizer instead of RDKit's mol round-trip.
-    """
-    raw_lines = xyz_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    i = 0
-    while i < len(raw_lines) and raw_lines[i].strip() == "":
-        i += 1
-    if i >= len(raw_lines):
-        raise ValueError(f"XYZ file empty: {xyz_path}")
-    n = int(float(raw_lines[i].split()[0]))
-    i += 1
-    # Second line is the comment/title (may be blank); still consume exactly one line.
-    if i < len(raw_lines):
-        i += 1
-    lines_out: list[str] = []
-    while len(lines_out) < n and i < len(raw_lines):
-        ln = raw_lines[i].strip()
-        i += 1
-        if ln == "":
-            continue
-        parts = ln.split()
-        if len(parts) < 4:
-            raise ValueError(f"Bad coordinate line in {xyz_path}: {ln!r}")
-        sym = parts[0]
-        x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
-        lines_out.append(f"{sym:>2}    {x:20.14f}       {y:20.14f}       {z:20.14f}")
-    if len(lines_out) < n:
-        raise ValueError(f"XYZ file has fewer than {n} coordinate lines: {xyz_path}")
-    return "\n".join(lines_out)
-
-
-def _resolve_trusted_geometry_xyz_path(
-    explicit_path: Optional[str | Path],
-    mol: Chem.Mol,
-) -> Optional[Path]:
-    if explicit_path is not None:
-        p = Path(explicit_path).expanduser()
-        if p.is_file():
-            return p.resolve()
-    if mol.HasProp(PEACE_XTB_OPTIMIZED_XYZ_PATH):
-        p = Path(mol.GetProp(PEACE_XTB_OPTIMIZED_XYZ_PATH)).expanduser()
-        if p.is_file():
-            return p.resolve()
-    return None
-
-
 def _parse_orca_cosmo_rs_dgsolv_kcal_mol(text: str) -> Optional[float]:
     float_re = _float_regex()
     kcal_token = re.compile(rf"({float_re})\s+kcal/mol", re.IGNORECASE)
@@ -212,26 +159,11 @@ def _run_orca_cosmo_rs(
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
-    geometry_xyz_path: Optional[Path] = None,
 ) -> tuple[Optional[float], str]:
     scratch_dir.mkdir(parents=True, exist_ok=True)
     inp_name = "cosmo_job.inp"
     inp_path = scratch_dir / inp_name
-    if geometry_xyz_path is not None and geometry_xyz_path.is_file():
-        coord_block = _read_raw_xyz_coord_lines_for_orca(geometry_xyz_path)
-        _log_status(
-            log_paths,
-            "OK",
-            f"ORCA COSMO-RS using coordinates from xyz file {geometry_xyz_path.name}",
-        )
-    else:
-        coord_block = _mol_h_to_orca_coord_lines(mol)
-        if geometry_xyz_path is not None:
-            _log_status(
-                log_paths,
-                "WARN",
-                f"geometry_xyz_path missing or not a file ({geometry_xyz_path}); using RDKit mol coordinates",
-            )
+    coord_block = _mol_h_to_orca_coord_lines(mol)
     inp_body = (
         f"!COSMORS({solvent})\n"
         f"* xyz {charge} {multiplicity}\n"
@@ -302,7 +234,6 @@ def refine_protomer_solvation_with_orca_cosmors(
     solvent: str = "water",
     charge_override: Optional[int] = None,
     orca_executable: str = "orca",
-    geometry_xyz_path: Optional[str | Path] = None,
     dry_run: bool = False,
     timeout_s: Optional[int] = None,
     log_paths: Optional[list[Path]] = None,
@@ -314,8 +245,7 @@ def refine_protomer_solvation_with_orca_cosmors(
     CPCM-X value as ``solvation_free_energy_cpcmx_kcal_mol`` when replacing
     ``solvation_free_energy_kcal_mol``.
 
-    Coordinates in the ORCA input prefer ``geometry_xyz_path`` if given, else the
-    molecule property ``peace_xtb_optimized_xyz_path``, else RDKit mol coordinates.
+    Coordinates in the ORCA input are taken from RDKit mol conformer coordinates.
     """
     def _progress(message: str) -> None:
         if progress_callback is not None:
@@ -339,7 +269,6 @@ def refine_protomer_solvation_with_orca_cosmors(
         except ValueError:
             pass
 
-    geom_xyz = _resolve_trusted_geometry_xyz_path(geometry_xyz_path, mol)
     dgsolv, _merged = _run_orca_cosmo_rs(
         mol=mol,
         scratch_dir=scratch,
@@ -350,7 +279,6 @@ def refine_protomer_solvation_with_orca_cosmors(
         timeout_s=timeout_s,
         dry_run=dry_run,
         log_paths=lp,
-        geometry_xyz_path=geom_xyz,
     )
     _cleanup_orca_refine_scratch_keep_log(scratch, lp)
     if dgsolv is None:
@@ -1236,8 +1164,6 @@ def run_protomer_screening(
         )
 
     preserved_xtbopt = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
-    if preserved_xtbopt is not None and protomer.mol is not None:
-        protomer.mol.SetProp(PEACE_XTB_OPTIMIZED_XYZ_PATH, str(preserved_xtbopt.resolve()))
     _cleanup_scratch_dir(
         scratch_dir,
         keep_scratch=keep_scratch,
@@ -1272,9 +1198,8 @@ def run_protomer_solvation(
     *,
     protomer_id: int | str = 0,
     scratch_root: str | Path = "./scratch_solvation",
-    conformer_mode: Literal["mmff94", "external_xyz", "skip_search"] = "mmff94",
+    conformer_mode: Literal["mmff94", "external_xyz", "skip_search"] = "skip_search",
     external_xyz_path: Optional[str | Path] = None,
-    geometry_xyz_path: Optional[str | Path] = None,
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
@@ -1282,7 +1207,6 @@ def run_protomer_solvation(
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     sp_energy: Literal["gxtb", "xtb"] = "gxtb",
-    run_geometry_optimization: bool = False,
     recompute_solvation: bool = False,
     recompute_frequencies: bool = False,
     reuse_screening_terms: bool = True,
@@ -1357,51 +1281,28 @@ def run_protomer_solvation(
             log_paths=log_paths,
         )
 
-        trusted_geom = _resolve_trusted_geometry_xyz_path(geometry_xyz_path, protomer.mol)
         input_xyz_path: Optional[Path] = None
         gas_sp_hess_kcal_mol: Optional[float] = None
 
-        if run_geometry_optimization:
-            input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
-            active_xyz_path = input_xyz_path
-            _progress("optimizing geometry")
-            xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = _run_xtb_optimization(
-                mol=mol,
-                scratch_dir=scratch_dir,
-                input_xyz_path=input_xyz_path,
-                xtb_executable=xtb_executable,
-                solvent=solvent,
-                opt_level=opt_level,
-                timeout_s=timeout_s,
-                dry_run=dry_run,
-                log_paths=log_paths,
+        input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
+        active_xyz_path = input_xyz_path
+
+        # reuse the energies from the previous screening step if applicable
+        if reuse_screening_terms:
+            solvation_free_energy_kcal_mol = (
+                protomer.mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")
+                if protomer.mol.HasProp("screening_solvation_free_energy_kcal_mol") else solvation_free_energy_kcal_mol
             )
-            active_xyz_path = xtbopt_xyz_path
-            xtbopt_xyz_block = _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
-        else:
-            if trusted_geom is not None:
-                xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
-                shutil.copy2(trusted_geom, xtbopt_xyz_path)
-                shutil.copy2(trusted_geom, scratch_dir / "input.xyz")
-                active_xyz_path = xtbopt_xyz_path
-                _log_status(
-                    log_paths,
-                    "OK",
-                    "using optimized geometry from xtbopt.xyz on disk "
-                    f"({trusted_geom.name}), not coordinates re-serialized from the RDKit mol",
-                )
-                _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
-            else:
-                input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
-                active_xyz_path = input_xyz_path
-
-        if reuse_screening_terms and protomer.mol.HasProp("screening_solvation_free_energy_kcal_mol"):
-            solvation_free_energy_kcal_mol = protomer.mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")
-        if reuse_screening_terms and protomer.mol.HasProp("screening_rrho_contribution_kcal_mol"):
-            rrho_contribution_kcal_mol = protomer.mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")
-        if reuse_screening_terms and protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol"):
-            gas_sp_hess_kcal_mol = protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
-
+            rrho_contribution_kcal_mol = (
+                protomer.mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")
+                if protomer.mol.HasProp("screening_rrho_contribution_kcal_mol") else rrho_contribution_kcal_mol
+            )
+            gas_sp_hess_kcal_mol = (
+                protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
+                if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol") else gas_sp_hess_kcal_mol
+            )
+       
+       # compute DGsolv
         if recompute_solvation or solvation_free_energy_kcal_mol is None:
             _progress("computing solvation single point")
             solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
@@ -1417,6 +1318,7 @@ def run_protomer_solvation(
                 log_paths=log_paths,
             )
 
+        # compute RRHO term
         if recompute_frequencies or rrho_contribution_kcal_mol is None or gas_sp_hess_kcal_mol is None:
             _progress("computing frequencies")
             gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_hess_h = _run_hessian_and_parse_energies(
@@ -1429,6 +1331,8 @@ def run_protomer_solvation(
                 dry_run=dry_run,
                 log_paths=log_paths,
             )
+
+        # compute SP energy
         if sp_energy == "gxtb":
             _progress("computing gas-phase single point")
             gas_sp_energy_kcal_mol, _ = _run_gxtb_single_point_energy(
@@ -1445,6 +1349,7 @@ def run_protomer_solvation(
         else:
             raise ValueError(f"Unknown sp_energy mode: {sp_energy}")
 
+        # compute solution-phase free energy by adding everything together
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
             gas_sp_energy_kcal_mol,
             solvation_free_energy_kcal_mol,
@@ -1500,8 +1405,6 @@ def run_protomer_solvation(
     )
 
     final_xtbopt_path = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
-    if final_xtbopt_path is not None and protomer.mol is not None:
-        protomer.mol.SetProp(PEACE_XTB_OPTIMIZED_XYZ_PATH, str(final_xtbopt_path.resolve()))
     _cleanup_scratch_dir(
         scratch_dir,
         keep_scratch=keep_scratch,

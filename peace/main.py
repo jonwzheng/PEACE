@@ -287,7 +287,6 @@ if __name__ == "__main__":
                 keep_logs=bool(args.keep_logs),
                 parse_solvation=args.parse_solvation,
                 sp_energy=args.sp_energy,
-                run_geometry_optimization=False,
                 recompute_solvation=False,
                 recompute_frequencies=False,
                 reuse_screening_terms=True,
