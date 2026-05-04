@@ -220,12 +220,16 @@ def _run_orca_cosmo_rs(
     return dgsolv, gas_sp_h, merged
 
 
-def _cleanup_orca_refine_scratch_keep_log(scratch_dir: Path, log_paths: list[Path]) -> None:
+def _cleanup_orca_refine_scratch_keep_log(scratch_dir: Path, 
+    keep_scratch: bool = False,
+    *,
+    log_paths: list[Path],
+) -> None:
     """
     Keep only ``orca_cosmo_run.log`` in ORCA refine scratch.
     """
     keep_name = "orca_cosmo_run.log"
-    if not scratch_dir.exists():
+    if not scratch_dir.exists() or keep_scratch:
         return
     for entry in scratch_dir.iterdir():
         if entry.name == keep_name:
@@ -293,7 +297,7 @@ def refine_protomer_solvation_with_orca_cosmors(
         dry_run=dry_run,
         log_paths=lp,
     )
-    _cleanup_orca_refine_scratch_keep_log(scratch, lp)
+    _cleanup_orca_refine_scratch_keep_log(scratch, keep_scratch=keep_scratch, log_paths=lp)
     if dgsolv is None:
         return None
 
