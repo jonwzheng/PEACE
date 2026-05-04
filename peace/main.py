@@ -363,6 +363,7 @@ if __name__ == "__main__":
                             protomer,
                             scratch_dir=refine_root,
                             solvent="water",
+                            keep_scratch=bool(args.keep_scratch),
                             orca_executable=str(args.orca_executable),
                             dry_run=bool(args.dry_run),
                             log_paths=[wf_log],

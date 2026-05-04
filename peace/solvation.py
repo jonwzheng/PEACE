@@ -249,6 +249,7 @@ def refine_protomer_solvation_with_orca_cosmors(
     *,
     scratch_dir: str | Path,
     solvent: str = "water",
+    keep_scratch: bool = False,
     charge_override: Optional[int] = None,
     orca_executable: str = "orca",
     dry_run: bool = False,
