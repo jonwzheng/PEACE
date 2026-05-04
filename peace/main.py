@@ -78,6 +78,30 @@ def _build_cli_parser():
         action="store_true",
         help="Exclude connectivity-mismatch protomers from Boltzmann weighting and f_zwit while still reporting them.",
     )
+    p.add_argument(
+        "--refine",
+        action="store_true",
+        help=(
+            "After the g-xTB solvation stage, re-evaluate solvation with ORCA openCOSMO-RS for "
+            "low-lying protomers (requires ORCA on PATH). Implies workflows that completed with valid "
+            "solution-phase energies; use with --optimize."
+        ),
+    )
+    p.add_argument(
+        "--refine-threshold",
+        type=float,
+        default=5.0,
+        help=(
+            "For --refine: include protomers whose g-xTB solution-phase free energy is within "
+            "this many kcal/mol of the lowest such energy (default: 5)."
+        ),
+    )
+    p.add_argument(
+        "--orca-executable",
+        type=str,
+        default="orca",
+        help="ORCA executable for the optional --refine COSMO-RS step.",
+    )
     return p
 
 
@@ -133,7 +157,10 @@ def _header_banner() -> str:
 
 if __name__ == "__main__":
     start_ts = time.time()
-    args = _build_cli_parser().parse_args()
+    parser = _build_cli_parser()
+    args = parser.parse_args()
+    if args.refine and not args.optimize:
+        parser.error("--refine requires --optimize")
     run_started_at = _ts()
     _log(_header_banner())
     _log(f"Version: {__version__}")
@@ -296,6 +323,115 @@ if __name__ == "__main__":
                 f"screen_delta={screen_delta} "
                 f"placeholder_solution_energy={placeholder_energy}"
             )
+        if args.refine:
+            from peace.solvation import refine_protomer_solvation_with_orca_cosmors
+
+            _log(" *** ORCA openCOSMO-RS REFINE *** ")
+            refine_pool: list[tuple[int, int, Any, float]] = []
+            for taut_idx, prot_idx, protomer, _screen_e, _screen_d in protomers_to_optimize:
+                if protomer.mol is None or not protomer.mol.HasProp("solution_phase_free_energy_kcal_mol"):
+                    continue
+                try:
+                    g_sol = float(protomer.mol.GetProp("solution_phase_free_energy_kcal_mol"))
+                except ValueError:
+                    continue
+                refine_pool.append((taut_idx, prot_idx, protomer, g_sol))
+            if not refine_pool:
+                _log("Refine: no protomers with valid post–g-xTB solution-phase energies; skipping ORCA.")
+            else:
+                g_min_ref = min(x[3] for x in refine_pool)
+                thr_ref = float(args.refine_threshold)
+                picked = [x for x in refine_pool if x[3] - g_min_ref <= thr_ref + 1e-9]
+                picked_keys = {(taut_idx, prot_idx) for taut_idx, prot_idx, _protomer, _g_sol in picked}
+                _log(
+                    "Refine: lowest g-xTB solution-phase G = "
+                    f"{g_min_ref:.6f} kcal/mol; threshold = {thr_ref:.3f} kcal/mol; "
+                    f"ORCA COSMO-RS runs = {len(picked)}"
+                )
+                for taut_idx, prot_idx, protomer, g_sol in picked:
+                    n_prot = len(spec.tautomers[taut_idx].protomers)
+                    prefix = (
+                        f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
+                        f"protomer {prot_idx + 1}/{n_prot}"
+                    )
+                    delta = g_sol - g_min_ref
+                    _log(f"ORCA refine {prefix} (ΔG from min = {delta:.3f} kcal/mol)")
+                    refine_root = species_scratch / f"tautomer_{taut_idx}" / "orca_refine" / f"protomer_{prot_idx}"
+                    wf_log = species_scratch / "peace.out"
+                    try:
+                        refine_protomer_solvation_with_orca_cosmors(
+                            protomer,
+                            scratch_dir=refine_root,
+                            solvent="water",
+                            orca_executable=str(args.orca_executable),
+                            dry_run=bool(args.dry_run),
+                            log_paths=[wf_log],
+                            progress_callback=lambda s, p=prefix: _log(f"  [{p}] {s}"),
+                        )
+                    except Exception as exc:
+                        _log(f"ORCA refine failed for {prefix}: {exc}")
+
+                refined_success: list[tuple[int, int, Any, float]] = []
+                for taut_idx, prot_idx, protomer, _g_sol_pre in picked:
+                    if protomer.mol is None:
+                        continue
+                    if (
+                        protomer.mol.HasProp("solvation_refined_cosmors")
+                        and protomer.mol.GetProp("solvation_refined_cosmors").lower() == "true"
+                        and protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
+                    ):
+                        try:
+                            g_refined = float(protomer.mol.GetProp("solution_phase_free_energy_kcal_mol"))
+                        except ValueError:
+                            continue
+                        refined_success.append((taut_idx, prot_idx, protomer, g_refined))
+
+                if not refined_success:
+                    _log("Refine: no successful ORCA results; leaving post–g-xTB energies unchanged.")
+                else:
+                    min_refined_final = min(x[3] for x in refined_success)
+                    _log(
+                        "Refine propagation: anchoring non-refined screened-in protomers to "
+                        f"lowest refined final G = {min_refined_final:.6f} kcal/mol using pre-refine deltas."
+                    )
+
+                    for taut_idx, prot_idx, protomer, g_sol_pre in refine_pool:
+                        if protomer.mol is None:
+                            continue
+                        is_refined_success = (
+                            protomer.mol.HasProp("solvation_refined_cosmors")
+                            and protomer.mol.GetProp("solvation_refined_cosmors").lower() == "true"
+                        )
+                        if is_refined_success:
+                            continue
+                        delta_pre = g_sol_pre - g_min_ref
+                        propagated_energy = min_refined_final + delta_pre
+                        protomer.mol.SetDoubleProp("refine_pre_delta_kcal_mol", float(delta_pre))
+                        protomer.mol.SetDoubleProp(
+                            "solution_phase_free_energy_unrefined_kcal_mol",
+                            float(g_sol_pre),
+                        )
+                        protomer.mol.SetDoubleProp(
+                            "solution_phase_free_energy_kcal_mol",
+                            float(propagated_energy),
+                        )
+                        protomer.mol.SetProp("refine_propagated_from_unrefined_delta", "true")
+                        status = "selected_but_refine_failed" if (taut_idx, prot_idx) in picked_keys else "not_selected_for_refine"
+                        protomer.mol.SetProp("refine_status", status)
+
+                    # Keep screened-out placeholder energies consistent with the final refined baseline.
+                    for taut_idx, prot_idx, protomer, _screening_energy, screen_delta in screened_out:
+                        if protomer.mol is None or screen_delta is None:
+                            continue
+                        placeholder_energy = min_refined_final + screen_delta
+                        _set_optional_double_prop(
+                            protomer,
+                            "screening_placeholder_solution_phase_free_energy_kcal_mol",
+                            placeholder_energy,
+                        )
+                        _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
+                        protomer.mol.SetProp("screening_placeholder_reanchored_to_refined_min", "true")
+
         _log(f"Optimization outputs saved under: {species_scratch}")
 
         _log("Calculating Boltzmann populations")
