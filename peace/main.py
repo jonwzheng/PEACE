@@ -13,9 +13,9 @@ def _build_cli_parser():
     p = argparse.ArgumentParser(description="PEACE demo: tautomer/protomer enumeration + optional xTB solvation workflow.")
     p.add_argument("--smiles", type=str, default="NCCCC(=O)CCC(=O)O", help="Input SMILES to enumerate.")
     p.add_argument(
-        "--optimize",
+        "--solvation",
         action="store_true",
-        help="If set, run the solvation energy workflow for all generated protomers (requires xTB + g-xTB binaries).",
+        help="If set, runs a solvation energy workflow for all generated protomers (requires xTB + g-xTB binaries).",
     )
     p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
     p.add_argument("--scratch-root", type=str, default="./solvation_results", help="Scratch root for xTB runs.")
@@ -51,14 +51,6 @@ def _build_cli_parser():
         default="loose",
         choices=["loose", "tight", "vtight"],
         help="Optimization level for xTB runs.",
-
-    )
-    p.add_argument(
-        "--parse-solvation",
-        type=str,
-        default="g",
-        choices=["g", "e"],
-        help="Solvation energy parser mode: 'g' for dG_solv (default), 'e' for Gsolv.",
     )
     p.add_argument(
         "--sp-energy",
@@ -84,9 +76,10 @@ def _build_cli_parser():
         help=(
             "After the g-xTB solvation stage, re-evaluate solvation with ORCA openCOSMO-RS for "
             "low-lying protomers (requires ORCA on PATH). Implies workflows that completed with valid "
-            "solution-phase energies; use with --optimize."
+            "solution-phase energies; use with --solvation."
         ),
     )
+
     p.add_argument(
         "--refine-threshold",
         type=float,
@@ -159,8 +152,8 @@ if __name__ == "__main__":
     start_ts = time.time()
     parser = _build_cli_parser()
     args = parser.parse_args()
-    if args.refine and not args.optimize:
-        parser.error("--refine requires --optimize")
+    if args.refine and not args.solvation:
+        parser.error("--refine requires --solvation")
     run_started_at = _ts()
     _log(_header_banner())
     _log(f"Version: {__version__}")
@@ -192,7 +185,7 @@ if __name__ == "__main__":
         for prot_idx, prot in taut.protomers.items():
             _log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)}: {prot.smiles}")
 
-    if args.optimize:
+    if args.solvation:
         from peace.solvation import run_protomer_solvation, run_protomer_screening
         import shutil
 
@@ -229,7 +222,6 @@ if __name__ == "__main__":
                     opt_level=args.opt_level,
                     keep_scratch=bool(args.keep_scratch),
                     keep_logs=bool(args.keep_logs),
-                    parse_solvation=args.parse_solvation,
                     dry_run=bool(args.dry_run),
                     progress_callback=lambda stage, prefix=prefix: _log(f"  [{prefix}] {stage}"),
                 )
@@ -285,7 +277,6 @@ if __name__ == "__main__":
                 external_xyz_path=args.external_xyz,
                 keep_scratch=bool(args.keep_scratch),
                 keep_logs=bool(args.keep_logs),
-                parse_solvation=args.parse_solvation,
                 sp_energy=args.sp_energy,
                 recompute_solvation=False,
                 recompute_frequencies=False,
