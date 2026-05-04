@@ -148,6 +148,14 @@ def _parse_orca_cosmo_rs_dgsolv_kcal_mol(text: str) -> Optional[float]:
     return None
 
 
+def _parse_orca_solute_gas_phase_energy_hartree(text: str) -> Optional[float]:
+    float_re = _float_regex()
+    patterns = [
+        rf"FINAL SINGLE POINT ENERGY \(Solute-gas-phase\)\s*({float_re})",
+    ]
+    return _parse_last_float(patterns, text)
+
+
 def _run_orca_cosmo_rs(
     *,
     mol: Chem.Mol,
@@ -159,7 +167,7 @@ def _run_orca_cosmo_rs(
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
-) -> tuple[Optional[float], str]:
+) -> tuple[Optional[float], Optional[float], str]:
     scratch_dir.mkdir(parents=True, exist_ok=True)
     inp_name = "cosmo_job.inp"
     inp_path = scratch_dir / inp_name
@@ -175,7 +183,7 @@ def _run_orca_cosmo_rs(
 
     if dry_run:
         _log_status(log_paths, "SKIP", "dry_run; skipping ORCA COSMO-RS")
-        return None, ""
+        return None, None, ""
 
     cmd = [orca_executable, inp_name]
     _log_status(log_paths, "STEP", f"running ORCA COSMO-RS: {' '.join(shlex.quote(x) for x in cmd)}")
@@ -197,14 +205,19 @@ def _run_orca_cosmo_rs(
             "FAIL",
             f"ORCA failed returncode={cp.returncode} tail={merged[-800:]}",
         )
-        return None, merged
+        return None, None, merged
 
     dgsolv = _parse_orca_cosmo_rs_dgsolv_kcal_mol(merged)
     if dgsolv is None:
         _log_status(log_paths, "WARN", "could not parse dGsolv (kcal/mol) from ORCA output")
     else:
         _log_status(log_paths, "OK", f"parsed ORCA dGsolv_kcal_mol={dgsolv}")
-    return dgsolv, merged
+    gas_sp_h = _parse_orca_solute_gas_phase_energy_hartree(merged)
+    if gas_sp_h is None:
+        _log_status(log_paths, "WARN", "could not parse ORCA solute gas-phase SP energy (Hartree)")
+    else:
+        _log_status(log_paths, "OK", f"parsed ORCA solute gas-phase SP (Hartree)={gas_sp_h}")
+    return dgsolv, gas_sp_h, merged
 
 
 def _cleanup_orca_refine_scratch_keep_log(scratch_dir: Path, log_paths: list[Path]) -> None:
@@ -269,7 +282,7 @@ def refine_protomer_solvation_with_orca_cosmors(
         except ValueError:
             pass
 
-    dgsolv, _merged = _run_orca_cosmo_rs(
+    dgsolv, gas_sp_orca_h, _merged = _run_orca_cosmo_rs(
         mol=mol,
         scratch_dir=scratch,
         charge=charge,
@@ -291,6 +304,22 @@ def refine_protomer_solvation_with_orca_cosmors(
     gas_sp_energy_kcal_mol: Optional[float] = None
     if mol.HasProp("gas_sp_energy_kcal_mol"):
         gas_sp_energy_kcal_mol = float(mol.GetDoubleProp("gas_sp_energy_kcal_mol"))
+        _set_mol_prop_double(mol, "gas_sp_energy_gxtb_kcal_mol", gas_sp_energy_kcal_mol)
+
+    gas_sp_energy_bp86_kcal_mol: Optional[float] = None
+    if gas_sp_orca_h is not None:
+        gas_sp_energy_bp86_kcal_mol = gas_sp_orca_h * HARTREE_TO_KCAL_MOL
+        _set_mol_prop_double(mol, "gas_sp_energy_bp86_kcal_mol", gas_sp_energy_bp86_kcal_mol)
+        # Replace the active gas SP term used in final solution free energy.
+        gas_sp_energy_kcal_mol = gas_sp_energy_bp86_kcal_mol
+        _set_mol_prop_double(mol, "gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
+        _log_status(lp, "OK", f"using BP86 gas-phase SP for refined solution energy: {gas_sp_energy_bp86_kcal_mol}")
+    else:
+        _log_status(
+            lp,
+            "WARN",
+            "ORCA gas-phase SP unavailable; keeping existing gas_sp_energy_kcal_mol value",
+        )
     rrho_contribution_kcal_mol: Optional[float] = None
     if mol.HasProp("rrho_contribution_kcal_mol"):
         rrho_contribution_kcal_mol = float(mol.GetDoubleProp("rrho_contribution_kcal_mol"))
