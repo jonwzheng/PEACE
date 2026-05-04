@@ -441,9 +441,7 @@ def _parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
 
 
 def _parse_xtb_solvent_free_energy_hartree(
-    text: str,
-    *
-) -> Optional[float]:
+    text: str) -> Optional[float]:
     float_re = _float_regex()
     patterns = [
         rf"solvation free energy \(dG_solv\):[\ \t]*({float_re})",
