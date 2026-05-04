@@ -11,9 +11,7 @@ More details forthcoming.
 ## Getting started
 Simply clone this repo and add this base directory to PATH, or run calculations directly from here.
 
-For the estimation of individual protomer populations, the user needs to install CREST, xTB with CPCM-X, and g-xTB with the respective binary or execution script added to path.
-
-Optionally, [ORCA](https://orcaforum.kofo.mpg.de/app.php/portal) can be installed and placed on `PATH`: after the default xTB / g-xTB solvation workflow (`python -m peace.main --optimize ...`), you may add **`--refine`** to re-evaluate solvation with ORCA’s openCOSMO-RS for protomers within **`--refine-threshold`** (kcal/mol) of the lowest g-xTB solution-phase energy, then refresh Boltzmann microstate populations using the refined solvation contributions.
+For the estimation of individual protomer populations, the user needs to install CREST, xTB with CPCM-X, and g-xTB with the respective binary or execution script added to path. Optionally, [ORCA](https://www.faccts.de/docs/orca/6.0/tutorials/index.html) can also be installed and placed on `PATH`: after the default xTB / g-xTB solvation workflow (`python -m peace.main --optimize ...`), you may add **`--refine`** to re-evaluate solvation with ORCA’s openCOSMO-RS for protomers within **`--refine-threshold`** (kcal/mol) of the lowest g-xTB solution-phase energy. This gives a somewhat more accurate evaluation of the solvation energy, which is added to the g-xTB gas-phase energies and xTB frequency calculation.
 
 ## How it works:
 
