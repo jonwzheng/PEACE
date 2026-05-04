@@ -332,6 +332,16 @@ if __name__ == "__main__":
                 g_min_ref = min(x[3] for x in refine_pool)
                 thr_ref = float(args.refine_threshold)
                 picked = [x for x in refine_pool if x[3] - g_min_ref <= thr_ref + 1e-9]
+                if len(picked) < 2:
+                    _log(
+                        "Refine: fewer than two protomers within threshold; skipping openCOSMO-RS ORCA calc to save resources. "
+                        f"within_threshold={len(picked)} threshold={thr_ref:.3f} kcal/mol"
+                    )
+                    _log(
+                        "Refine: criterion requires at least two candidates (e.g., 0 and <= threshold kcal/mol) "
+                        "relative to the lowest post–g-xTB solution-phase energy."
+                    )
+                    picked = []
                 picked_keys = {(taut_idx, prot_idx) for taut_idx, prot_idx, _protomer, _g_sol in picked}
                 _log(
                     "Refine: lowest g-xTB solution-phase G = "
