@@ -1,20 +1,42 @@
-molecule,SMILES,f_zwit,source,notes
-cis-apovincaminic acid,CC[C@@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999995926213818,doi.org/10.1002/cmdc.202000164,
-trans-apovincaminic acid,CC[C@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999986817606392,doi.org/10.1002/cmdc.202000164,
-niflumic acid,O=C(O)c1cccnc1Nc1cccc(C(F)(F)F)c1,0.940649056897232,doi.org/10.1002/cmdc.202000164,
-morphine,CN1CC[C@]23c4c5ccc(O)c4O[C@H]2[C@@H](O)C=C[C@H]3[C@H]1C5,0.25746444105693,doi.org/10.1002/cmdc.202000164,
-5-HTP,NC(Cc1c[nH]c2ccc(O)cc12)C(=O)O,0.999994988152782,doi.org/10.1002/cmdc.202000164,
-thyroxine,N[C@@H](Cc1cc(I)c(Oc2cc(I)c(O)c(I)c2)c(I)c1)C(=O)O,0.999971160516709,doi.org/10.1002/cmdc.202000164,
-liothyronine,N[C@@H](Cc1cc(I)c(Oc2ccc(O)c(I)c2)c(I)c1)C(=O)O,0.999975453513388,doi.org/10.1002/cmdc.202000164,
-ciprofloxacin,O=C(O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O,0.686300257683312,doi.org/10.1021/ed074p1311,surprisingly close results
-serotonin (5-HT),NCCc1c[nH]c2ccc(O)cc12,0.476990412702438,doi.org/10.1002/cbdv.200800087,tautomer fail
-m-nitrophenylglycine,O=C(O)CNc1cccc([N+](=O)[O-])c1,0,doi.org/10.26190/unsworks/10693,
-m-cyanophenylglycine,O=C(O)CNc1cccc(C#N)c1,0,doi.org/10.26190/unsworks/10693,
-m-chlorophenylglycine,O=C(O)CNc1cccc(Cl)c1,0.11,doi.org/10.26190/unsworks/10693,
-m-acetylphenylglycine,O=C(O)CNc1cccc(C(=O)C)c1,0.13,doi.org/10.26190/unsworks/10693,
-p-chlorophenylglycine,O=C(O)CNc1ccc(Cl)cc1,0.295,doi.org/10.26190/unsworks/10693,
-m-methoxyphenylglycine,O=C(O)CNc1cccc(OC)c1,0.38,doi.org/10.26190/unsworks/10693,
-phenylglycine,O=C(O)CNc1ccccc1,0.645,doi.org/10.26190/unsworks/10693,
-m-methylphenylglycine,O=C(O)CNc1cccc(C)c1,0.68,doi.org/10.26190/unsworks/10693,
-p-methylphenylglycine,O=C(O)CNc1ccc(C)cc1,0.834,doi.org/10.26190/unsworks/10693,
-p-methoxyphenylglycine,O=C(O)CNc1ccc(OC)cc1,0.907,doi.org/10.26190/unsworks/10693,"qualitatively good agreement, esp compare to m-form"
+molecule,SMILES,f_zwit,source,type,notes
+cis-apovincaminic acid,CC[C@@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999995926213818,doi.org/10.1002/cmdc.202000164,expt,
+trans-apovincaminic acid,CC[C@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999986817606392,doi.org/10.1002/cmdc.202000164,expt,
+niflumic acid,O=C(O)c1cccnc1Nc1cccc(C(F)(F)F)c1,0.940649056897232,doi.org/10.1002/cmdc.202000164,expt,
+morphine,CN1CC[C@]23c4c5ccc(O)c4O[C@H]2[C@@H](O)C=C[C@H]3[C@H]1C5,0.25746444105693,doi.org/10.1002/cmdc.202000164,expt,
+5-HTP,NC(Cc1c[nH]c2ccc(O)cc12)C(=O)O,0.999994988152782,doi.org/10.1002/cmdc.202000164,expt,
+thyroxine,N[C@@H](Cc1cc(I)c(Oc2cc(I)c(O)c(I)c2)c(I)c1)C(=O)O,0.999971160516709,doi.org/10.1002/cmdc.202000164,expt,
+liothyronine,N[C@@H](Cc1cc(I)c(Oc2ccc(O)c(I)c2)c(I)c1)C(=O)O,0.999975453513388,doi.org/10.1002/cmdc.202000164,expt,
+ciprofloxacin,O=C(O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O,0.686300257683312,doi.org/10.1021/ed074p1311,expt,surprisingly close results
+serotonin (5-HT),NCCc1c[nH]c2ccc(O)cc12,0.476990412702438,doi.org/10.1002/cbdv.200800087,expt,tautomer fail; corroborated by a value of 0.42 from doi.org/10.1111/j.1476-5381.1980.tb07908.x
+m-nitrophenylglycine,O=C(O)CNc1cccc([N+](=O)[O-])c1,0,doi.org/10.26190/unsworks/10693,expt,
+m-cyanophenylglycine,O=C(O)CNc1cccc(C#N)c1,0,doi.org/10.26190/unsworks/10693,expt,
+m-chlorophenylglycine,O=C(O)CNc1cccc(Cl)c1,0.11,doi.org/10.26190/unsworks/10693,expt,
+m-acetylphenylglycine,O=C(O)CNc1cccc(C(=O)C)c1,0.13,doi.org/10.26190/unsworks/10693,expt,
+p-chlorophenylglycine,O=C(O)CNc1ccc(Cl)cc1,0.295,doi.org/10.26190/unsworks/10693,expt,
+m-methoxyphenylglycine,O=C(O)CNc1cccc(OC)c1,0.38,doi.org/10.26190/unsworks/10693,expt,
+phenylglycine,O=C(O)CNc1ccccc1,0.645,doi.org/10.26190/unsworks/10693,expt,
+m-methylphenylglycine,O=C(O)CNc1cccc(C)c1,0.68,doi.org/10.26190/unsworks/10693,expt,
+p-methylphenylglycine,O=C(O)CNc1ccc(C)cc1,0.834,doi.org/10.26190/unsworks/10693,expt,
+p-methoxyphenylglycine,O=C(O)CNc1ccc(OC)cc1,0.907,doi.org/10.26190/unsworks/10693,expt,"qualitatively good agreement, esp compare to m-form"
+3-hydroxypicolinamide,NC(=O)c1ncccc1O,0.93,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+azapropazone,CCCC1C(=O)N2C(N(C)C)=Nc3ccc(C)cc3N2C1=O,0.9999999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+mizoribine,NC(=O)c1ncn([C@@H]2O[C@H](CO)[C@@H](O)[C@H]2O)c1O,1,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+piroxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2ccccc2S1(=O)=O,0.9995,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1ncccc1O,0.9,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+4-chloro-N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1nccc(Cl)c1O,0.98,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+N-cyclohexyl-3-hydroxy-4-methylpyridine-2-carboxamide,Cc1ccnc(C(=O)NC2CCCCC2)c1O,0.95,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+N-cyclohexyl-3-hydroxy-4-methoxypyridine-2-carboxamide,COc1ccnc(C(=O)NC2CCCCC2)c1O,0.999999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+roxadustat,Cc1nc(C(=O)NCC(=O)O)c(O)c2ccc(Oc3ccccc3)cc12,0.9999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,"95% Z1, 4.99% Z2"
+vadadustat,O=C(O)CNC(=O)c1ncc(-c2cccc(Cl)c2)cc1O,0.88,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,"41% Z1, 47% Z2"
+FG-2216,O=C(O)CNC(=O)c1nc(Cl)c2ccccc2c1O,0.002001,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,"0.2% Z1, 0.0001% Z2"
+2-[(3-hydroxypyridine-2-carbonyl)amino]acetic acid,C1=CC(=C(N=C1)C(=O)NCC(=O)O)O,0.97,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+isoxicam,Cc1cc(NC(=O)C2=C(O)c3ccccc3S(=O)(=O)N2C)no1,0.00005,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+meloxicam,Cc1cnc(NC(=O)C2=C(O)c3ccccc3S(=O)(=O)N2C)s1,0.89,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+sudoxicam,CN1C(C(=O)Nc2nccs2)=C(O)c2ccccc2S1(=O)=O,0.74,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+tenoxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2sccc2S1(=O)=O,0.9998,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+lornoxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2sc(Cl)cc2S1(=O)=O,0.999999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+tyramine,NCCc1ccc(O)cc1,0.753694581280788,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 3.06 +/- 1.63
+p-hydroxyphenethyldimethylamine,CN(C)CCc1ccc(O)cc1,0.49238578680203,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 0.97 +/- 0.51
+m-hydroxyphenethylmethylamine,NCCCc1cccc(O)c1,0.836867862969005,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 5.13 +/- 2.83
+m-hydroxyphenethyldimethylamine,CN(C)CCc1cccc(O)c1,0.514563106796117,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 1.06 +/- 0.57
+dopamine,NCCc1ccc(O)c(O)c1,0.918233851185609,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 11.23 +/- 2.54
