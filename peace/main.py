@@ -326,10 +326,16 @@ if __name__ == "__main__":
         import shutil
 
         scratch_root_path = Path(args.scratch_root)
+        input_species_key = seed_spec.key
         for charge_state in requested_charges:
             spec = species_by_charge[charge_state]
             tautomer_items = list(spec.tautomers.items())
             total_protomers = sum(len(taut.protomers) for _, taut in tautomer_items)
+            species_scratch = (
+                scratch_root_path
+                / f"species_{input_species_key}"
+                / f"charge_{charge_state}"
+            )
             skip_single = (
                 bool(args.skip_single_protomer_solvation)
                 and len(tautomer_items) == 1
@@ -345,9 +351,7 @@ if __name__ == "__main__":
                     "Skipping solvation workflow for single-tautomer/single-protomer species "
                     f"(charge={charge_state}); assigned default solution-phase free energy = -10000.0 kcal/mol."
                 )
-                species_scratch = scratch_root_path / f"charge_{charge_state:+d}" / f"species_{spec.key}"
             else:
-                species_scratch = scratch_root_path / f"charge_{charge_state:+d}" / f"species_{spec.key}"
                 if species_scratch.exists():
                     if args.override_solvation:
                         _log(f"Override enabled: removing existing optimization folder {species_scratch}")
@@ -355,7 +359,7 @@ if __name__ == "__main__":
                     else:
                         raise FileExistsError(
                             "Existing solvation results detected. "
-                            f"Found existing species folder: {species_scratch}. "
+                            f"Found existing charge folder: {species_scratch}. "
                             "Use --override-solvation to delete prior results and rerun."
                         )
                 species_scratch.mkdir(parents=True, exist_ok=True)
