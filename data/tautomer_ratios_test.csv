@@ -40,3 +40,10 @@ p-hydroxyphenethyldimethylamine,CN(C)CCc1ccc(O)cc1,0.49238578680203,doi.org/10.1
 m-hydroxyphenethylmethylamine,NCCCc1cccc(O)c1,0.836867862969005,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 5.13 +/- 2.83
 m-hydroxyphenethyldimethylamine,CN(C)CCc1cccc(O)c1,0.514563106796117,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 1.06 +/- 0.57
 dopamine,NCCc1ccc(O)c(O)c1,0.918233851185609,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 11.23 +/- 2.54
+norfloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNCC3)cc21,0.894117647058824,doi.org/10.1002/jps.2600791116,expt,
+pefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCN(C)CC3)cc21,0.922077922077922,doi.org/10.1002/jps.2600791116,expt,
+amifloxacin,CNn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCN(C)CC3)cc21,0.986301369863014,doi.org/10.1002/jps.2600791116,expt,
+lomefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNC(C)C3)c(F)c21,0.965116279069768,doi.org/10.1002/jps.2600791116,expt,
+8-fluoro-norfloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNCC3)c(F)c21,0.956521739130435,doi.org/10.1002/jps.2600791116,expt,
+8-fluoro-pefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCN(C)CC3)c(F)c21,0.974683544303797,doi.org/10.1002/jps.2600791116,expt,
+8-desfluoro-lomefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNC(C)C3)cc21,0.880952380952381,doi.org/10.1002/jps.2600791116,expt,
