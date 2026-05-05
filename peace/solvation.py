@@ -621,6 +621,7 @@ def _run_xtb_optimization(
     input_xyz_path: Path,
     xtb_executable: str,
     opt_level: str,
+    charge: int,
     solvent: str,
     timeout_s: Optional[int],
     dry_run: bool,
@@ -649,7 +650,8 @@ def _run_xtb_optimization(
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
         f"{input_flag} "
-        f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)}"
+        f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)} "
+        f"--charge {shlex.quote(str(charge))}"
     )
     _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
     cp_opt = _run(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
@@ -1131,6 +1133,7 @@ def run_protomer_screening(
             xtb_executable=xtb_executable,
             solvent=solvent,
             opt_level=opt_level,
+            charge=charge,
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
