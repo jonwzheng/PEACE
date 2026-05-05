@@ -711,8 +711,13 @@ def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
     return edges
 
 
-def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_paths: list[Path]) -> Optional[str]:
+def _update_protomer_geometry_from_xyz(
+    protomer: Protomer,
+    xyz_path: Path,
+    log_paths: list[Path],
+) -> tuple[Optional[str], bool]:
   # build a bonded graph from optimized xyz coordinates for sanity checking.
+  # tuple[Optional[str], bool]: the first element is the xyz text, the second element is a boolean indicating whether there was a connectivity mismatch.
     mol_opt = Chem.MolFromXYZFile(str(xyz_path))
     if mol_opt is not None and mol_opt.GetNumConformers() > 0:
         rdDetermineBonds.DetermineConnectivity(mol_opt)
@@ -734,26 +739,39 @@ def _update_protomer_geometry_from_xyz(protomer: Protomer, xyz_path: Path, log_p
                 )[:4000],
             )
             warnings.warn(
-                f"Optimized structure connectivity differs from input mol!! Please double-check the optimized structure. Got: {opt_edges}, Expected: {input_edges}",
+                f"Optimized structure connectivity differs from input mol! Using unoptimized geometry instead (this result is less trustworthy!) Got: {opt_edges}, Expected: {input_edges}",
                 RuntimeWarning,
             )
             _log_status(
                 log_paths,
                 "WARN",
-                "optimized connectivity does not match input connectivity!!",
+                "optimized connectivity does not match input connectivity -- using unoptimized geometry. This could cause errors!",
             )
+            if protomer.mol is not None:
+                protomer.mol.SetProp("connectivity_mismatch", "true")
+                protomer.mol.SetProp(
+                    "connectivity_mismatch_error",
+                    (
+                        "Optimized structure connectivity differs from input mol. "
+                        f"Got: {sorted(opt_edges)}, Expected: {sorted(input_edges)}"
+                    )[:4000],
+                )
+            # fallback: keep pre-optimization graph/geometry attached to protomer.
+            return xyz_path.read_text(), True
         else:
             mol_opt.SetProp("connectivity_mismatch", "false")
+            if protomer.mol is not None:
+                protomer.mol.SetProp("connectivity_mismatch", "false")
         protomer.mol = mol_opt
         _log_status(log_paths, "OK", f"updated protomer geometry from {xyz_path.name}")
-        return xyz_path.read_text()
+        return xyz_path.read_text(), False
     _log_status(
         log_paths,
         "WARN",
         f"RDKit MolFromXYZFile did not yield a conformer for {xyz_path}; "
         "mol coordinates may be stale — downstream xTB/ORCA still use the xyz file on disk when provided.",
     )
-    return None
+    return None, False
 
 def _run_cpcmx_single_point(
     *,
@@ -1117,12 +1135,23 @@ def run_protomer_screening(
             dry_run=dry_run,
             log_paths=log_paths,
         )
-        _update_protomer_geometry_from_xyz(protomer, xtbopt_xyz_path, log_paths)
+        _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
+            protomer,
+            xtbopt_xyz_path,
+            log_paths,
+        )
+        active_xyz_path = input_xyz_path if has_connectivity_mismatch else xtbopt_xyz_path
+        if has_connectivity_mismatch:
+            _log_status(
+                log_paths,
+                "WARN",
+                f"connectivity mismatch detected; running subsequent screening steps with pre-optimized geometry {input_xyz_path.name}",
+            )
 
         _progress("computing screening solvation single point")
         solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
             scratch_dir=scratch_dir,
-            xtbopt_xyz_path=xtbopt_xyz_path,
+            xtbopt_xyz_path=active_xyz_path,
             xtb_executable=xtb_executable,
             solvent=solvent,
             charge=charge,
@@ -1135,7 +1164,7 @@ def run_protomer_screening(
         _progress("computing screening frequencies")
         gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _ = _run_hessian_and_parse_energies(
             scratch_dir=scratch_dir,
-            xtbopt_xyz_path=xtbopt_xyz_path,
+            xtbopt_xyz_path=active_xyz_path,
             xtb_executable=xtb_executable,
             charge=charge,
             gfn=gfn,
@@ -1184,7 +1213,7 @@ def run_protomer_screening(
             stdout_tail=str(e)[-4000:],
         )
 
-    preserved_xtbopt = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
+    _preserved_xtbopt = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
     _cleanup_scratch_dir(
         scratch_dir,
         keep_scratch=keep_scratch,

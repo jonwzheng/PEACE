@@ -31,7 +31,6 @@ class ChargeEngine:
             smarts_collection = self.SMARTS_DICT["strong_acidic"]
             collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
             if len(collection) == 0:
-                warnings.warn(f"No strong acidic sites found for {taut.protomers[0].smiles}, searching for weak acidic sites.")
                 smarts_collection = self.SMARTS_DICT["weak_acidic"]
                 collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
             return collection
@@ -39,7 +38,6 @@ class ChargeEngine:
             smarts_collection = self.SMARTS_DICT["strong_basic"]
             collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
             if len(collection) == 0:
-                warnings.warn(f"No strong basic sites found for {taut.protomers[0].smiles}, searching for weak basic sites.")
                 smarts_collection = self.SMARTS_DICT["weak_basic"]
                 collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
             return collection

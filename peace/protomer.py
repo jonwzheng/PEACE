@@ -188,9 +188,19 @@ class Tautomer:
         # Check for isomorphic
         existing_smiles = [canon_smiles(p.smiles) for p in self.protomers.values()]
         if any([canon_smiles(protomer.smiles) == x for x in existing_smiles]):
-            warnings.warn(f"Protomer {protomer.smiles} not added due to degeneracy.")
+            for existing_protomer in self.protomers.values():
+                if canon_smiles(existing_protomer.smiles) == canon_smiles(protomer.smiles):
+                    if existing_protomer.mol is not None:
+                        if existing_protomer.mol.HasProp("degeneracy"):
+                            existing_count = int(existing_protomer.mol.GetProp("degeneracy"))
+                        else:
+                            existing_count = 1
+                        existing_protomer.mol.SetIntProp("degeneracy", existing_count + 1)
+                    break
             return False
         else:
+            if protomer.mol is not None:
+                protomer.mol.SetIntProp("degeneracy", 1)
             self.protomers[idx] = protomer
             return True
 
@@ -391,6 +401,7 @@ class Species:
             "workflow_status",
             "workflow_error",
             "connectivity_mismatch",
+            "degeneracy",
 #            "connectivity_mismatch_error",
         ]
         for taut_idx, tautomer in self.tautomers.items():
