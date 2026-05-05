@@ -138,13 +138,36 @@ def _enumerate_species_protomers(spec: Species, *, engine: ChargeEngine) -> None
 
     _log("Enumerating protomeric forms for each tautomer")
     for taut_idx, taut in tautomer_items:
-        acid_sites = engine.search_ionization_centers(taut, "acidic")
-        basic_sites = engine.search_ionization_centers(taut, "basic")
-        _log(
-            f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} ionization sites -> "
-            f"acidic={acid_sites if acid_sites else '[]'}, basic={basic_sites if basic_sites else '[]'}"
-        )
-        taut.generate_protomers_from_base_protomer(acid_sites, basic_sites)
+        # Iterative protomer expansion:
+        # each newly discovered protomer becomes a seed to discover additional
+        # protonation/deprotonation combinations (supports multi-zwitterions).
+        seed_queue = [taut.protomers[0]]
+        processed_seed_smiles = set()
+        round_idx = 0
+
+        while seed_queue:
+            round_idx += 1
+            seed_protomer = seed_queue.pop(0)
+            seed_smiles = seed_protomer.smiles
+            if seed_smiles in processed_seed_smiles:
+                continue
+            processed_seed_smiles.add(seed_smiles)
+
+            seed_taut = Tautomer.from_mol(copy.deepcopy(seed_protomer.mol))
+            acid_sites = engine.search_ionization_centers(seed_taut, "acidic")
+            basic_sites = engine.search_ionization_centers(seed_taut, "basic")
+            _log(
+                f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} round {round_idx} seed={seed_smiles} "
+                f"ionization sites -> acidic={acid_sites if acid_sites else '[]'}, "
+                f"basic={basic_sites if basic_sites else '[]'}"
+            )
+            new_protomers = taut.generate_protomers_from_seed_protomer(
+                seed_protomer,
+                acid_sites,
+                basic_sites,
+            )
+            seed_queue.extend(new_protomers)
+
         _log(
             f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers found: {len(taut.protomers)}"
         )

@@ -82,13 +82,19 @@ class Tautomer:
     def from_mol(cls, mol: Mol):
         return cls(Protomer.from_mol(mol))
 
-    def find_ionization_sites(self, query_substructs: list[Mol], query_sites: list[int]) -> list[int]:
+    def find_ionization_sites(
+        self,
+        query_substructs: list[Mol],
+        query_sites: list[int],
+        protomer: Protomer | None = None,
+    ) -> list[int]:
         """
         Takes the base protomer mol and tries to find the acidic or basic sites on it matching query.
         Returns a list of atom indices. 
         """
         sites = []
-        base_mol = copy.deepcopy(self.protomers[0].mol)
+        seed_protomer = protomer if protomer is not None else self.protomers[0]
+        base_mol = copy.deepcopy(seed_protomer.mol)
 
         sites = extract_matches_from_smarts_collection(base_mol, 
                                                         query_substructs,
@@ -100,24 +106,30 @@ class Tautomer:
         
         return sites
     
-    def generate_protomers_from_base_protomer(self, acidic_sites: list[int], basic_sites: list[int]):
+    def generate_protomers_from_seed_protomer(
+        self,
+        seed_protomer: Protomer,
+        acidic_sites: list[int],
+        basic_sites: list[int],
+    ) -> list[Protomer]:
         """
-        Takes the ref protomer and enumerates other protomers given possible given the acid/base sites.
-        Most often used in combination with find_ionization_sites.
+        Enumerate protomers by applying one protonation/deprotonation pair to a
+        provided seed protomer.
 
-        Args:
-            acid_sites: list of acidity centers for mol
-            basic_sites: list of basic centers for mol
+        Returns:
+            List of newly embedded protomers.
         """
+        new_protomers = []
 
-        # simultaneously consider all acid-base pairs
-        # basically this gives us zwitterions
-        acid_base_pairs = [r for r in itertools.product(acidic_sites, basic_sites)] 
+        # simultaneously consider all acid-base pairs.
+        acid_base_pairs = [r for r in itertools.product(acidic_sites, basic_sites)]
         for acid_base_pair in acid_base_pairs:
-            mol = copy.deepcopy(self.protomers[0].mol)
+            mol = copy.deepcopy(seed_protomer.mol)
 
             acidic_idx = acid_base_pair[0]
             basic_idx = acid_base_pair[1]
+            if acidic_idx == basic_idx:
+                continue
             protonate_at_site(mol, basic_idx)
             deprotonate_at_site(mol, acidic_idx)
 
@@ -132,8 +144,24 @@ class Tautomer:
                 # Keep running, but force a smiles value that reflects the transformed mol.
                 new_protomer.smiles = new_smiles
 
-            new_protomer.ionization_sites = [basic_idx, acidic_idx]
-            self.embed_protomer(new_protomer)
+            # keep historical ionization-site highlights across iterative generations.
+            prior_sites = seed_protomer.ionization_sites if seed_protomer.ionization_sites else []
+            new_protomer.ionization_sites = list(dict.fromkeys(prior_sites + [basic_idx, acidic_idx]))
+            if self.embed_protomer(new_protomer):
+                new_protomers.append(new_protomer)
+        return new_protomers
+
+    def generate_protomers_from_base_protomer(self, acidic_sites: list[int], basic_sites: list[int]):
+        """
+        Takes the ref protomer and enumerates other protomers given possible given the acid/base sites.
+        Most often used in combination with find_ionization_sites.
+
+        Args:
+            acid_sites: list of acidity centers for mol
+            basic_sites: list of basic centers for mol
+        """
+
+        self.generate_protomers_from_seed_protomer(self.protomers[0], acidic_sites, basic_sites)
 
 
     def generate_uncharged_protomer(self, protomer: Protomer) -> Protomer:
@@ -145,12 +173,14 @@ class Tautomer:
         # TODO: assert number of N[H1,H2,H3]+ groups MINUS the  number of [X-] groups is equal to the overall charge.
         return protomer
 
-    def embed_protomer(self, protomer: Protomer):
+    def embed_protomer(self, protomer: Protomer) -> bool:
         """
         Embeds a protomer to the Tautomer.
         Args:
             protomer: The protomer to add
             idx: the id of the protomer to label.
+        Returns:
+            True if the protomer was added, False if it was not.
         """
         #TODO: check if generated protomers have same # of heavy atoms to base
         idx = list(self.protomers.keys())[-1] + 1
@@ -159,8 +189,10 @@ class Tautomer:
         existing_smiles = [canon_smiles(p.smiles) for p in self.protomers.values()]
         if any([canon_smiles(protomer.smiles) == x for x in existing_smiles]):
             warnings.warn(f"Protomer {protomer.smiles} not added due to degeneracy.")
+            return False
         else:
             self.protomers[idx] = protomer
+            return True
 
     def generate_protomer_plot(self, n_columns : int):
         """ Plots up to n_columns showing the mol objects. Returns an image."""
