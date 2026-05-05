@@ -60,7 +60,7 @@ def extract_matches_from_smarts_collection(query_mol: Mol, groups: list[Mol], si
 
     return matching_sites    
 
-def show_images(imgs: list, buffer: int = 5, mode = "vertical"):
+def show_images(imgs: list, buffer: int = 20, mode = "vertical"):
     """ 
     Given a list of images, return 1 image.
     Adapted from Greg Landrum's blog: 
@@ -73,7 +73,7 @@ def show_images(imgs: list, buffer: int = 5, mode = "vertical"):
     for img in imgs:
         if mode == "vertical":
             width = max(width, img.width)
-            height += img.height
+            height += img.height + buffer
 
         elif mode == "horizontal":
             height = max(height, img.height)
