@@ -47,3 +47,6 @@ lomefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNC(C)C3)c(F)c21,0.965116279069768,d
 8-fluoro-norfloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNCC3)c(F)c21,0.956521739130435,doi.org/10.1002/jps.2600791116,expt,
 8-fluoro-pefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCN(C)CC3)c(F)c21,0.974683544303797,doi.org/10.1002/jps.2600791116,expt,
 8-desfluoro-lomefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNC(C)C3)cc21,0.880952380952381,doi.org/10.1002/jps.2600791116,expt,
+quinazolone-3-CH2COOH,Cc1nc2ccccc2c(=O)n1CC(=O)O,0.397841906825283,doi.org/10.1016/S0731-7085(99)00238-1,expt,structure provided by authors do not appear to line up with name – using structure not name
+pyridoxine,Cc1ncc(CO)c(CO)c1O,0.890450638722925,doi.org/10.1016/S0731-7085(99)00238-1,expt,
+cetirizine,O=C(O)COCCN1CCN(C(c2ccccc2)c2ccc(Cl)cc2)CC1,0.999993543499396,doi.org/10.2116/analsci.17.1203,expt,
