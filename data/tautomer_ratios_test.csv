@@ -20,7 +20,7 @@ p-methylphenylglycine,O=C(O)CNc1ccc(C)cc1,0.834,doi.org/10.26190/unsworks/10693,
 p-methoxyphenylglycine,O=C(O)CNc1ccc(OC)cc1,0.907,doi.org/10.26190/unsworks/10693,expt,"qualitatively good agreement, esp compare to m-form"
 3-hydroxypicolinamide,NC(=O)c1ncccc1O,0.93,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
 azapropazone,CCCC1C(=O)N2C(N(C)C)=Nc3ccc(C)cc3N2C1=O,0.9999999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
-mizoribine,NC(=O)c1ncn([C@@H]2O[C@H](CO)[C@@H](O)[C@H]2O)c1O,1,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
+mizoribine,NC(=O)c1ncn([C@@H]2O[C@H](CO)[C@@H](O)[C@H]2O)c1O,1,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,"PEACE predicts the right protomer, namely NC(=O)c1[nH+]cn([C@@H]2O[C@H](CO)[C@@H](O)[C@H]2O)c1[O-]. See: https://pubs.rsc.org/en/content/articlelanding/2000/p1/b005510g"
 piroxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2ccccc2S1(=O)=O,0.9995,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
 N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1ncccc1O,0.9,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,
 4-chloro-N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1nccc(Cl)c1O,0.98,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,

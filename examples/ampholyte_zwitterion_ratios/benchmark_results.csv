@@ -1,20 +1,52 @@
 molecule,SMILES,experimental_f_zwit,predicted_f_zwit,abs_error,run_ok,run_returncode,result_dir
-cis-apovincaminic acid,CC[C@@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999995926213818,0.9999993842161676,3.4580023495767165e-06,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/000_cis-apovincaminic-acid
-trans-apovincaminic acid,CC[C@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999986817606392,0.9999949662682116,8.148661819640246e-06,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/001_trans-apovincaminic-acid
-niflumic acid,O=C(O)c1cccnc1Nc1cccc(C(F)(F)F)c1,0.940649056897232,0.999999999834006,0.05935094293677401,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/002_niflumic-acid
-morphine,CN1CC[C@]23c4c5ccc(O)c4O[C@H]2[C@@H](O)C=C[C@H]3[C@H]1C5,0.25746444105693,3.9223609994731366e-07,0.25746404882083007,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/003_morphine
-5-HTP,NC(Cc1c[nH]c2ccc(O)cc12)C(=O)O,0.999994988152782,0.9999992269232872,4.238770505260447e-06,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/004_5-htp
-thyroxine,N[C@@H](Cc1cc(I)c(Oc2cc(I)c(O)c(I)c2)c(I)c1)C(=O)O,0.999971160516709,0.999998283646365,2.7123129656025924e-05,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/005_thyroxine
-liothyronine,N[C@@H](Cc1cc(I)c(Oc2ccc(O)c(I)c2)c(I)c1)C(=O)O,0.999975453513388,0.9999936407934832,1.818728009517212e-05,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/006_liothyronine
-ciprofloxacin,O=C(O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O,0.686300257683312,0.9133022786898063,0.22700202100649425,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/007_ciprofloxacin
-serotonin (5-HT),NCCc1c[nH]c2ccc(O)cc12,0.476990412702438,7.723609413627208e-05,0.47691317660830174,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/008_serotonin-5-ht
-m-nitrophenylglycine,O=C(O)CNc1cccc([N+](=O)[O-])c1,0.0,5.0552615944524775e-05,5.0552615944524775e-05,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/009_m-nitrophenylglycine
-m-cyanophenylglycine,O=C(O)CNc1cccc(C#N)c1,0.0,0.0005630457749204,0.0005630457749204,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/010_m-cyanophenylglycine
-m-chlorophenylglycine,O=C(O)CNc1cccc(Cl)c1,0.11,0.0020259059988594,0.1079740940011406,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/011_m-chlorophenylglycine
-m-acetylphenylglycine,O=C(O)CNc1cccc(C(=O)C)c1,0.13,0.013937227482595148,0.11606277251740485,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/012_m-acetylphenylglycine
-p-chlorophenylglycine,O=C(O)CNc1ccc(Cl)cc1,0.295,0.0005576359064362,0.2944423640935638,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/013_p-chlorophenylglycine
-m-methoxyphenylglycine,O=C(O)CNc1cccc(OC)c1,0.38,0.0955097230289916,0.28449027697100837,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/014_m-methoxyphenylglycine
-phenylglycine,O=C(O)CNc1ccccc1,0.645,0.2268179884904399,0.41818201150956014,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/015_phenylglycine
-m-methylphenylglycine,O=C(O)CNc1cccc(C)c1,0.68,0.3060160490757266,0.37398395092427344,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/016_m-methylphenylglycine
-p-methylphenylglycine,O=C(O)CNc1ccc(C)cc1,0.834,0.266163845699839,0.567836154300161,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/017_p-methylphenylglycine
-p-methoxyphenylglycine,O=C(O)CNc1ccc(OC)cc1,0.907,0.7126994617531913,0.1943005382468087,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/018_p-methoxyphenylglycine
+cis-apovincaminic acid,CC[C@@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999995926213818,0.9999953189267994,6.072870186724089e-07,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/000_cis-apovincaminic-acid
+trans-apovincaminic acid,CC[C@]12C=C(C(=O)O)n3c4c(c5ccccc53)CCN(CCC1)[C@H]42,0.999986817606392,0.9999945597173954,7.742111003405938e-06,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/001_trans-apovincaminic-acid
+niflumic acid,O=C(O)c1cccnc1Nc1cccc(C(F)(F)F)c1,0.940649056897232,0.829092840648454,0.11155621624877798,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/002_niflumic-acid
+morphine,CN1CC[C@]23c4c5ccc(O)c4O[C@H]2[C@@H](O)C=C[C@H]3[C@H]1C5,0.25746444105693,4.584170420968376e-18,0.25746444105693,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/003_morphine
+5-HTP,NC(Cc1c[nH]c2ccc(O)cc12)C(=O)O,0.999994988152782,0.9999947284672631,2.596855188663483e-07,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/004_5-htp
+thyroxine,N[C@@H](Cc1cc(I)c(Oc2cc(I)c(O)c(I)c2)c(I)c1)C(=O)O,0.999971160516709,0.9999441296829192,2.7030833789742914e-05,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/005_thyroxine
+liothyronine,N[C@@H](Cc1cc(I)c(Oc2ccc(O)c(I)c2)c(I)c1)C(=O)O,0.999975453513388,0.9999358114581874,3.9642055200572734e-05,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/006_liothyronine
+ciprofloxacin,O=C(O)c1cn(C2CC2)c2cc(N3CCNCC3)c(F)cc2c1=O,0.686300257683312,4.814715711103242e-05,0.686252110526201,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/007_ciprofloxacin
+serotonin (5-HT),NCCc1c[nH]c2ccc(O)cc12,0.476990412702438,2.9877115189261917e-09,0.4769904097147265,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/008_serotonin-5-ht
+m-nitrophenylglycine,O=C(O)CNc1cccc([N+](=O)[O-])c1,0.0,6.639640000710558e-05,6.639640000710558e-05,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/009_m-nitrophenylglycine
+m-cyanophenylglycine,O=C(O)CNc1cccc(C#N)c1,0.0,0.0034360456766858,0.0034360456766858,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/010_m-cyanophenylglycine
+m-chlorophenylglycine,O=C(O)CNc1cccc(Cl)c1,0.11,0.0029079719318866,0.1070920280681134,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/011_m-chlorophenylglycine
+m-acetylphenylglycine,O=C(O)CNc1cccc(C(=O)C)c1,0.13,0.019315624751270532,0.11068437524872947,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/012_m-acetylphenylglycine
+p-chlorophenylglycine,O=C(O)CNc1ccc(Cl)cc1,0.295,0.0020600031783621,0.2929399968216379,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/013_p-chlorophenylglycine
+m-methoxyphenylglycine,O=C(O)CNc1cccc(OC)c1,0.38,0.1096759251717397,0.2703240748282603,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/014_m-methoxyphenylglycine
+phenylglycine,O=C(O)CNc1ccccc1,0.645,0.3408147646406216,0.3041852353593784,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/015_phenylglycine
+m-methylphenylglycine,O=C(O)CNc1cccc(C)c1,0.68,0.7091543656803683,0.02915436568036822,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/016_m-methylphenylglycine
+p-methylphenylglycine,O=C(O)CNc1ccc(C)cc1,0.834,0.4471427042772628,0.38685729572273714,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/017_p-methylphenylglycine
+p-methoxyphenylglycine,O=C(O)CNc1ccc(OC)cc1,0.907,0.5481355988220006,0.35886440117799945,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/018_p-methoxyphenylglycine
+3-hydroxypicolinamide,NC(=O)c1ncccc1O,0.93,0.5092137620481645,0.42078623795183556,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/019_3-hydroxypicolinamide
+azapropazone,CCCC1C(=O)N2C(N(C)C)=Nc3ccc(C)cc3N2C1=O,0.9999999,0.9970670437284892,0.002932856271510853,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/020_azapropazone
+mizoribine,NC(=O)c1ncn([C@@H]2O[C@H](CO)[C@@H](O)[C@H]2O)c1O,1.0,0.3141421540712788,0.6858578459287212,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/021_mizoribine
+piroxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2ccccc2S1(=O)=O,0.9995,0.9981614095965718,0.0013385904034282081,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/022_piroxicam
+N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1ncccc1O,0.9,1.4285211401148065e-05,0.8999857147885989,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/023_n-cyclohexyl-3-hydroxypyridine-2-carboxamide
+4-chloro-N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1nccc(Cl)c1O,0.98,0.35531751720043087,0.6246824827995692,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/024_4-chloro-n-cyclohexyl-3-hydroxypyridine-2-carboxamide
+N-cyclohexyl-3-hydroxy-4-methylpyridine-2-carboxamide,Cc1ccnc(C(=O)NC2CCCCC2)c1O,0.95,0.9892690700873435,0.039269070087343594,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/025_n-cyclohexyl-3-hydroxy-4-methylpyridine-2-carboxamide
+N-cyclohexyl-3-hydroxy-4-methoxypyridine-2-carboxamide,COc1ccnc(C(=O)NC2CCCCC2)c1O,0.999999,0.9999841468208054,1.4853179194584953e-05,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/026_n-cyclohexyl-3-hydroxy-4-methoxypyridine-2-carboxamide
+roxadustat,Cc1nc(C(=O)NCC(=O)O)c(O)c2ccc(Oc3ccccc3)cc12,0.9999,0.040036394410350236,0.9598636055896498,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/027_roxadustat
+vadadustat,O=C(O)CNC(=O)c1ncc(-c2cccc(Cl)c2)cc1O,0.88,2.7372730028873113e-08,0.8799999726272699,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/028_vadadustat
+FG-2216,O=C(O)CNC(=O)c1nc(Cl)c2ccccc2c1O,0.002001,5.822067422363621e-11,0.002000999941779326,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/029_fg-2216
+2-[(3-hydroxypyridine-2-carbonyl)amino]acetic acid,C1=CC(=C(N=C1)C(=O)NCC(=O)O)O,0.97,6.922631993101125e-11,0.9699999999307737,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/030_2-3-hydroxypyridine-2-carbonyl-amino-acetic-acid
+isoxicam,Cc1cc(NC(=O)C2=C(O)c3ccccc3S(=O)(=O)N2C)no1,5e-05,0.6698612852714886,0.6698112852714886,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/031_isoxicam
+meloxicam,Cc1cnc(NC(=O)C2=C(O)c3ccccc3S(=O)(=O)N2C)s1,0.89,0.9999125653396297,0.10991256533962968,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/032_meloxicam
+sudoxicam,CN1C(C(=O)Nc2nccs2)=C(O)c2ccccc2S1(=O)=O,0.74,0.9999980682836989,0.25999806828369887,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/033_sudoxicam
+tenoxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2sccc2S1(=O)=O,0.9998,0.9868228969183259,0.012977103081674102,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/034_tenoxicam
+lornoxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2sc(Cl)cc2S1(=O)=O,0.999999,0.9943650593255604,0.005633940674439564,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/035_lornoxicam
+tyramine,NCCc1ccc(O)cc1,0.753694581280788,8.169952542599725e-12,0.7536945812726181,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/036_tyramine
+p-hydroxyphenethyldimethylamine,CN(C)CCc1ccc(O)cc1,0.49238578680203,1.209558072897631e-16,0.4923857868020299,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/037_p-hydroxyphenethyldimethylamine
+m-hydroxyphenethylmethylamine,NCCCc1cccc(O)c1,0.836867862969005,4.444457167266896e-12,0.8368678629645605,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/038_m-hydroxyphenethylmethylamine
+m-hydroxyphenethyldimethylamine,CN(C)CCc1cccc(O)c1,0.514563106796117,1.8035528716979315e-16,0.5145631067961168,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/039_m-hydroxyphenethyldimethylamine
+dopamine,NCCc1ccc(O)c(O)c1,0.918233851185609,0.09168324789065901,0.8265506032949499,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/040_dopamine
+norfloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNCC3)cc21,0.894117647058824,0.8609178101042989,0.03319983695452511,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/041_norfloxacin
+pefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCN(C)CC3)cc21,0.922077922077922,0.999790942395007,0.07771302031708494,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/042_pefloxacin
+amifloxacin,CNn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCN(C)CC3)cc21,0.986301369863014,0.0956194467741267,0.8906819230888873,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/043_amifloxacin
+lomefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNC(C)C3)c(F)c21,0.965116279069768,0.9999993187811741,0.03488303971140605,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/044_lomefloxacin
+8-fluoro-norfloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNCC3)c(F)c21,0.956521739130435,0.9999879594871436,0.04346622035670855,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/045_8-fluoro-norfloxacin
+8-fluoro-pefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCN(C)CC3)c(F)c21,0.974683544303797,0.9993277184457354,0.024644174141938424,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/046_8-fluoro-pefloxacin
+8-desfluoro-lomefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNC(C)C3)cc21,0.880952380952381,0.2938738001235526,0.5870785808288285,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/047_8-desfluoro-lomefloxacin
+quinazolone-3-CH2COOH,Cc1nc2ccccc2c(=O)n1CC(=O)O,0.397841906825283,1.0044806031229157e-05,0.39783186201925175,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/048_quinazolone-3-ch2cooh
+pyridoxine,Cc1ncc(CO)c(CO)c1O,0.890450638722925,1.0610254739381136e-06,0.890449577697451,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/049_pyridoxine
+cetirizine,O=C(O)COCCN1CCN(C(c2ccccc2)c2ccc(Cl)cc2)CC1,0.999993543499396,0.999999999999377,6.4564999811000945e-06,True,0,/home/jonzheng/PEACE/results/f_zwit_benchmark/050_cetirizine
