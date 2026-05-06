@@ -62,6 +62,8 @@ def main() -> None:
         name = str(row.get("molecule", f"row_{idx}"))
         smiles = str(row["SMILES"])
         experimental = float(row["f_zwit"])
+        source = str(row.get("source", ""))
+        dtype = str(row.get("type", ""))
         mol_dir = results_root / f"{idx:03d}_{_slugify(name)}"
         mol_dir.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +106,8 @@ def main() -> None:
             {
                 "molecule": name,
                 "SMILES": smiles,
+                "source": source,
+                "dtype": dtype,
                 "experimental_f_zwit": experimental,
                 "predicted_f_zwit": predicted,
                 "abs_error": abs_error,
