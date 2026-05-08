@@ -5,6 +5,7 @@ from .orca import (
     parse_orca_solute_gas_phase_energy_hartree,
     run_orca_cosmo_rs,
 )
+from .skala import run_skala_single_point_energy
 from .xtb import (
     parse_xtb_rrho_contrib_hartree,
     parse_xtb_solvent_free_energy_hartree,
@@ -26,6 +27,7 @@ __all__ = [
     "parse_xtb_solvent_free_energy_hartree",
     "parse_xtb_total_energy_hartree",
     "run_orca_cosmo_rs",
+    "run_skala_single_point_energy",
     "run_cpcmx_single_point",
     "run_gxtb_single_point_energy",
     "run_hessian_and_parse_energies",

@@ -71,8 +71,8 @@ def _build_cli_parser():
         "--sp-energy",
         type=str,
         default="gxtb",
-        choices=["gxtb", "xtb"],
-        help="Gas-phase SP source: 'gxtb' (driver SP, default) or 'xtb' (from Hessian output).",
+        choices=["gxtb", "xtb", "skala"],
+        help="Gas-phase SP source: 'gxtb' (g-xTB), 'xtb' (GFN2-xTB), or 'skala' (NN xc-functional).",
     )
     p.add_argument(
         "--screen-threshold",
@@ -422,7 +422,7 @@ if __name__ == "__main__":
                     f"threshold={float(args.screen_threshold):.2f} kcal/mol"
                 )
 
-                _log(" *** SOLVATION STAGE (g-xTB on screened geometry) ***")
+                _log(" *** REFINING SCREENED PROTOMERS... (gas-phase SP) ***")
                 for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
                     protomer_items = list(spec.tautomers[taut_idx].protomers.items())
                     prefix = (

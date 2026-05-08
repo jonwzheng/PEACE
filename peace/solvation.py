@@ -17,6 +17,7 @@ from .calculators import (
     run_cpcmx_single_point,
     run_gxtb_single_point_energy,
     run_hessian_and_parse_energies,
+    run_skala_single_point_energy,
     run_xtb_optimization,
 )
 from .protomer import Protomer, Species, Tautomer
@@ -797,7 +798,7 @@ def run_protomer_solvation(
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
-    sp_energy: Literal["gxtb", "xtb"] = "gxtb",
+    sp_energy: Literal["gxtb", "xtb", "skala"] = "gxtb",
     recompute_frequencies: bool = False,
     reuse_screening_terms: bool = True,
     keep_scratch: bool = False,
@@ -920,7 +921,7 @@ def run_protomer_solvation(
             )
 
         # compute SP energy using a pluggable strategy map so additional
-        # calculators (MLFF?) can be added with minimal wiring.
+        # calculators can be added with minimal wiring.
         def _sp_energy_from_gxtb() -> Optional[float]:
             _progress("computing gas-phase single point")
             value_kcal_mol, _ = run_gxtb_single_point_energy(
@@ -939,9 +940,24 @@ def run_protomer_solvation(
         def _sp_energy_from_xtb_hessian() -> Optional[float]:
             return gas_sp_hess_kcal_mol
 
+        def _sp_energy_from_skala() -> Optional[float]:
+            _progress("computing gas-phase single point (Skala)")
+            multiplicity = _default_spin_multiplicity(protomer.mol)
+            value_kcal_mol, _ = run_skala_single_point_energy(
+                scratch_dir=scratch_dir,
+                xyz_path=active_xyz_path,
+                charge=charge,
+                multiplicity=multiplicity,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                log_status=_log_status,
+            )
+            return value_kcal_mol
+
         sp_energy_strategies: dict[str, Callable[[], Optional[float]]] = {
             "gxtb": _sp_energy_from_gxtb,
             "xtb": _sp_energy_from_xtb_hessian,
+            "skala": _sp_energy_from_skala,
         }
         try:
             gas_sp_energy_kcal_mol = sp_energy_strategies[sp_energy]()
@@ -1140,8 +1156,8 @@ def _build_cli_parser():
         "--sp-energy",
         type=str,
         default="gxtb",
-        choices=["gxtb", "xtb"],
-        help="Gas-phase SP source: 'gxtb' (driver SP, default) or 'xtb' (from Hessian output).",
+        choices=["gxtb", "xtb", "skala"],
+        help="Gas-phase SP source: 'gxtb' (g-xTB), 'xtb' (GFN2-xTB), or 'skala' (NN xc-functional).",
     )
     p.add_argument("--hess-charge-mode", type=str, default="negate", choices=["as_is", "negate"])
     return p
