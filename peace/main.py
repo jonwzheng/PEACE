@@ -68,11 +68,18 @@ def _build_cli_parser():
         help="Optimization level for xTB runs.",
     )
     p.add_argument(
+        "--optimization-engine",
+        type=str,
+        default="xtb",
+        choices=["xtb", "aimnet2"],
+        help="Geometry optimization engine for screening: 'xtb' or 'aimnet2' (ASE).",
+    )
+    p.add_argument(
         "--sp-energy",
         type=str,
         default="gxtb",
-        choices=["gxtb", "xtb", "skala"],
-        help="Gas-phase SP source: 'gxtb' (g-xTB), 'xtb' (GFN2-xTB), or 'skala' (NN xc-functional).",
+        choices=["gxtb", "xtb", "skala", "aimnet2"],
+        help="Gas-phase SP source: 'gxtb', 'xtb', 'skala', or 'aimnet2'.",
     )
     p.add_argument(
         "--screen-threshold",
@@ -381,6 +388,7 @@ if __name__ == "__main__":
                             scratch_root=species_scratch / f"tautomer_{taut_idx}" / "screening",
                             conformer_mode=args.conformer_mode,
                             external_xyz_path=args.external_xyz,
+                            optimization_engine=args.optimization_engine,
                             opt_level=args.opt_level,
                             keep_scratch=bool(args.keep_scratch),
                             keep_logs=bool(args.keep_logs),

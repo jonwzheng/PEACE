@@ -13,6 +13,8 @@ from rdkit.Chem import AllChem, rdDetermineBonds, Descriptors
 
 from .calculators import (
     cleanup_orca_refine_scratch_keep_log,
+    run_aimnet2_optimization,
+    run_aimnet2_single_point_energy,
     run_orca_cosmo_rs,
     run_cpcmx_single_point,
     run_gxtb_single_point_energy,
@@ -596,6 +598,7 @@ def run_protomer_screening(
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
+    optimization_engine: Literal["xtb", "aimnet2"] = "xtb",
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     keep_scratch: bool = False,
@@ -660,20 +663,32 @@ def run_protomer_screening(
         )
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
         _progress("optimizing screening geometry")
-        xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_xtb_optimization(
-            mol=mol,
-            scratch_dir=scratch_dir,
-            input_xyz_path=input_xyz_path,
-            xtb_executable=xtb_executable,
-            solvent=solvent,
-            opt_level=opt_level,
-            charge=charge,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-            run_command=_run,
-            log_status=_log_status,
-        )
+        if optimization_engine == "xtb":
+            xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_xtb_optimization(
+                mol=mol,
+                scratch_dir=scratch_dir,
+                input_xyz_path=input_xyz_path,
+                xtb_executable=xtb_executable,
+                solvent=solvent,
+                opt_level=opt_level,
+                charge=charge,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
+            )
+        elif optimization_engine == "aimnet2":
+            xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_aimnet2_optimization(
+                scratch_dir=scratch_dir,
+                input_xyz_path=input_xyz_path,
+                charge=charge,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                log_status=_log_status,
+            )
+        else:
+            raise ValueError(f"Unknown optimization_engine: {optimization_engine}")
         _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
             protomer,
             xtbopt_xyz_path,
@@ -798,7 +813,7 @@ def run_protomer_solvation(
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
-    sp_energy: Literal["gxtb", "xtb", "skala"] = "gxtb",
+    sp_energy: Literal["gxtb", "xtb", "skala", "aimnet2"] = "gxtb",
     recompute_frequencies: bool = False,
     reuse_screening_terms: bool = True,
     keep_scratch: bool = False,
@@ -954,10 +969,23 @@ def run_protomer_solvation(
             )
             return value_kcal_mol
 
+        def _sp_energy_from_aimnet2() -> Optional[float]:
+            _progress("computing gas-phase single point (AIMNet2)")
+            value_kcal_mol, _ = run_aimnet2_single_point_energy(
+                scratch_dir=scratch_dir,
+                xyz_path=active_xyz_path,
+                charge=charge,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                log_status=_log_status,
+            )
+            return value_kcal_mol
+
         sp_energy_strategies: dict[str, Callable[[], Optional[float]]] = {
             "gxtb": _sp_energy_from_gxtb,
             "xtb": _sp_energy_from_xtb_hessian,
             "skala": _sp_energy_from_skala,
+            "aimnet2": _sp_energy_from_aimnet2,
         }
         try:
             gas_sp_energy_kcal_mol = sp_energy_strategies[sp_energy]()

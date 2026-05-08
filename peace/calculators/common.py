@@ -4,6 +4,7 @@ import re
 from typing import Optional
 
 HARTREE_TO_KCAL_MOL = 627.5094740631
+EV_TO_KCAL_MOL = 23.06054783061903
 
 
 def float_regex() -> str:
