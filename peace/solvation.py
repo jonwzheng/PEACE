@@ -642,7 +642,6 @@ def run_protomer_screening(
     _progress("preparing conformer")
 
     conformer_energy_kcal_mol: Optional[float] = None
-    optimization_energy_kcal_mol: Optional[float] = None
     solvation_free_energy_kcal_mol: Optional[float] = None
     gas_sp_energy_kcal_mol: Optional[float] = None
     rrho_contribution_kcal_mol: Optional[float] = None
@@ -684,7 +683,6 @@ def run_protomer_screening(
                 run_command=_run,
                 log_status=_log_status,
             )
-            optimization_energy_kcal_mol = _opt_gas_sp_kcal_mol
         elif optimization_engine == "aimnet2":
             opt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_aimnet2_optimization(
                 scratch_dir=scratch_dir,
@@ -694,14 +692,9 @@ def run_protomer_screening(
                 log_paths=log_paths,
                 log_status=_log_status,
             )
-            optimization_energy_kcal_mol = _opt_gas_sp_kcal_mol
 
         _set_mol_prop_str(protomer.mol, "screening_optimization_engine", optimization_engine)
-        _set_mol_prop_double(
-            protomer.mol,
-            "screening_optimization_energy_kcal_mol",
-            optimization_energy_kcal_mol,
-        )
+
         _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
             protomer,
             opt_xyz_path,
@@ -842,7 +835,7 @@ def run_protomer_solvation(
     Solvates a protomer and gets the solution-phase energy
 
     Default staged behavior:
-    1) Reuse existing pre-screened geometry and terms if present.
+    1) Reuse existing pre-screened geometry and terms if present. Otherwise calculate from scratch.
     2) Run 'refined' gas-phase SP (depending on provided engine) on current geometry.
     3) Combine gas SP + RRHO + solvation into final solution-phase free energy.
     Optional flags allow geometry optimization and/or recomputing solvation and frequency terms.
@@ -902,7 +895,7 @@ def run_protomer_solvation(
         )
 
         input_xyz_path: Optional[Path] = None
-        gas_sp_hess_kcal_mol: Optional[float] = None
+        gas_sp_energy_kcal_mol: Optional[float] = None
 
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
         active_xyz_path = input_xyz_path
@@ -917,9 +910,9 @@ def run_protomer_solvation(
                 protomer.mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")
                 if protomer.mol.HasProp("screening_rrho_contribution_kcal_mol") else rrho_contribution_kcal_mol
             )
-            gas_sp_hess_kcal_mol = (
+            gas_sp_energy_kcal_mol = (
                 protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
-                if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol") else gas_sp_hess_kcal_mol
+                if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol") else gas_sp_energy_kcal_mol
             )
        
         # compute DGsolv only when requested or unavailable from screening.
@@ -947,9 +940,9 @@ def run_protomer_solvation(
             _progress("reusing screening solvation single point")
 
         # compute RRHO term
-        if recompute_frequencies or rrho_contribution_kcal_mol is None or gas_sp_hess_kcal_mol is None:
-            _progress("computing frequencies")
-            gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_hess_h = run_hessian_and_parse_energies(
+        if recompute_frequencies or rrho_contribution_kcal_mol is None:
+            _progress("computing RRHO contribution w/ frequency (xTB)")
+            gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_energy_h = run_hessian_and_parse_energies(
                 scratch_dir=scratch_dir,
                 xyz_path=active_xyz_path,
                 xtb_executable=xtb_executable,
@@ -966,20 +959,14 @@ def run_protomer_solvation(
         # reuse the optimization energy as SP when available.
         reused_optimization_sp = False
         if sp_energy == optimization_engine and reuse_screening_terms:
-            if (
-                protomer.mol.HasProp("screening_optimization_engine")
-                and protomer.mol.GetProp("screening_optimization_engine") == optimization_engine
-                and protomer.mol.HasProp("screening_optimization_energy_kcal_mol")
-            ):
-                gas_sp_energy_kcal_mol = protomer.mol.GetDoubleProp("screening_optimization_energy_kcal_mol")
-                reused_optimization_sp = True
-                _log_status(
-                    log_paths,
-                    "OK",
-                    f"reusing screening optimization energy as SP (engine={optimization_engine}) "
-                    f"gas_sp_energy_kcal_mol={gas_sp_energy_kcal_mol}",
-                )
-                _progress(f"reusing optimization energy for {optimization_engine} SP")
+            reused_optimization_sp = True
+            _log_status(
+                log_paths,
+                "OK",
+                f"reusing screening optimization energy as SP (engine={optimization_engine}) "
+                f"gas_sp_energy_kcal_mol={gas_sp_energy_kcal_mol}",
+            )
+            _progress(f"reusing optimization energy for {optimization_engine} SP")
 
         # compute SP energy using a pluggable strategy map so additional
         # calculators can be added with minimal wiring.
@@ -999,7 +986,7 @@ def run_protomer_solvation(
             return value_kcal_mol
 
         def _sp_energy_from_xtb_hessian() -> Optional[float]:
-            return gas_sp_hess_kcal_mol
+            return gas_sp_energy_kcal_mol
 
         def _sp_energy_from_skala() -> Optional[float]:
             _progress("computing gas-phase single point (Skala)")
@@ -1046,7 +1033,7 @@ def run_protomer_solvation(
             rrho_contribution_kcal_mol,
             log_paths,
         )
-        _progress("finished optimization workflow")
+        _progress("finished solvation workflow")
 
     except Exception as e:
         _progress(f"failed: {e}")
