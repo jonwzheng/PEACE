@@ -82,6 +82,16 @@ def _build_cli_parser():
         help="Gas-phase SP source: 'gxtb', 'xtb', 'skala', or 'aimnet2'.",
     )
     p.add_argument(
+        "--recompute-solvation",
+        action="store_true",
+        help="Recompute CPCM-X solvation in post-screen stage instead of reusing screening value.",
+    )
+    p.add_argument(
+        "--recompute-frequencies",
+        action="store_true",
+        help="Recompute frequencies in post-screen stage instead of reusing screening value.",
+    )
+    p.add_argument(
         "--screen-threshold",
         type=float,
         default=15.0,
@@ -93,7 +103,7 @@ def _build_cli_parser():
         help="Exclude connectivity-mismatch protomers from Boltzmann weighting and f_zwit while still reporting them.",
     )
     p.add_argument(
-        "--skip-single-protomer-solvation",
+        "--skip-single-protomer-solvation", # TODO: make apply for post-screening step
         action="store_true",
         help=(
             "With --solvation, skip screening/optimization for species that have exactly one tautomer "
@@ -438,23 +448,30 @@ if __name__ == "__main__":
                         f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
                         f"protomer {prot_idx + 1}/{len(protomer_items)}"
                     )
-                    _log(f"Optimizing {prefix}")
-                    _log(f"  [{prefix}] reusing screening conformer geometry (conformer_mode=skip_search)")
+                    if (
+                        args.optimization_engine == args.sp_energy
+                    ):
+                        _log(f"!! Optimization and SP engines are the same !!")
+                    else:
+                        _log(f"Refining {prefix}")
                     run_protomer_solvation(
                         protomer,
                         protomer_id=str(prot_idx),
                         scratch_root=species_scratch / f"tautomer_{taut_idx}",
                         conformer_mode="skip_search",
                         external_xyz_path=args.external_xyz,
+                        optimization_engine=args.optimization_engine,
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         sp_energy=args.sp_energy,
-                        recompute_frequencies=False,
+                        recompute_solvation=bool(args.recompute_solvation),
+                        recompute_frequencies=bool(args.recompute_frequencies),
                         reuse_screening_terms=True,
                         dry_run=bool(args.dry_run),
                         opt_level=args.opt_level,
                         progress_callback=lambda stage, prefix=prefix: _log(f"  [{prefix}] {stage}"),
                     )
+        
 
                 optimized_energies = [
                     protomer.mol.GetDoubleProp("solution_phase_free_energy_kcal_mol")

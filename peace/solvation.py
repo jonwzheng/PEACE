@@ -536,11 +536,12 @@ def _preserve_output_files(
     preserved_dir = scratch_dir.parent / "xyz"
     preserved_dir.mkdir(parents=True, exist_ok=True)
 
-    preserved_xtbopt_path: Optional[Path] = None
+    preserved_opt_path: Optional[Path] = None
     files_to_preserve = [
         "input.xyz",
         "xtbopt.xyz",
-        "xtbopt.log"
+        "aimnet2opt.xyz",
+        "xtbopt.log",
     ]
     for file_name in files_to_preserve:
         src = scratch_dir / file_name
@@ -549,8 +550,8 @@ def _preserve_output_files(
         dst = preserved_dir / f"{scratch_dir.name}_{file_name}"
         shutil.copy2(src, dst)
         _log_status(log_paths, "KEEP", f"preserved {file_name} at {dst}")
-        if file_name == "xtbopt.xyz":
-            preserved_xtbopt_path = dst
+        if file_name in ("xtbopt.xyz", "aimnet2opt.xyz"):
+            preserved_opt_path = dst
     if keep_logs:
         preserved_log_dir = scratch_dir.parent / "log"
         preserved_log_dir.mkdir(parents=True, exist_ok=True)
@@ -559,6 +560,10 @@ def _preserve_output_files(
             "gxtbsp_run.log",
             "xtbsolv_run.log",
             "xtbfreq_run.log",
+            "aimnet2opt_run.log",
+            "aimnet2sp_run.log",
+            "skalasp_run.log",
+            "orca_cosmo_run.log",
         ]
         for file_name in log_files_to_preserve:
             src = scratch_dir / file_name
@@ -568,7 +573,7 @@ def _preserve_output_files(
             shutil.copy2(src, dst)
             _log_status(log_paths, "KEEP", f"preserved {file_name} at {dst}")
 
-    return preserved_xtbopt_path
+    return preserved_opt_path
 
 
 def _cleanup_scratch_dir(
@@ -637,6 +642,7 @@ def run_protomer_screening(
     _progress("preparing conformer")
 
     conformer_energy_kcal_mol: Optional[float] = None
+    optimization_energy_kcal_mol: Optional[float] = None
     solvation_free_energy_kcal_mol: Optional[float] = None
     gas_sp_energy_kcal_mol: Optional[float] = None
     rrho_contribution_kcal_mol: Optional[float] = None
@@ -664,7 +670,7 @@ def run_protomer_screening(
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
         _progress("optimizing screening geometry")
         if optimization_engine == "xtb":
-            xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_xtb_optimization(
+            opt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_xtb_optimization(
                 mol=mol,
                 scratch_dir=scratch_dir,
                 input_xyz_path=input_xyz_path,
@@ -678,8 +684,9 @@ def run_protomer_screening(
                 run_command=_run,
                 log_status=_log_status,
             )
+            optimization_energy_kcal_mol = _opt_gas_sp_kcal_mol
         elif optimization_engine == "aimnet2":
-            xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_aimnet2_optimization(
+            opt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_aimnet2_optimization(
                 scratch_dir=scratch_dir,
                 input_xyz_path=input_xyz_path,
                 charge=charge,
@@ -687,14 +694,20 @@ def run_protomer_screening(
                 log_paths=log_paths,
                 log_status=_log_status,
             )
-        else:
-            raise ValueError(f"Unknown optimization_engine: {optimization_engine}")
+            optimization_energy_kcal_mol = _opt_gas_sp_kcal_mol
+
+        _set_mol_prop_str(protomer.mol, "screening_optimization_engine", optimization_engine)
+        _set_mol_prop_double(
+            protomer.mol,
+            "screening_optimization_energy_kcal_mol",
+            optimization_energy_kcal_mol,
+        )
         _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
             protomer,
-            xtbopt_xyz_path,
+            opt_xyz_path,
             log_paths,
         )
-        active_xyz_path = input_xyz_path if has_connectivity_mismatch else xtbopt_xyz_path
+        active_xyz_path = input_xyz_path if has_connectivity_mismatch else opt_xyz_path
         if has_connectivity_mismatch:
             _log_status(
                 log_paths,
@@ -808,12 +821,14 @@ def run_protomer_solvation(
     scratch_root: str | Path = "./scratch_solvation",
     conformer_mode: Literal["mmff94", "external_xyz", "skip_search"] = "skip_search",
     external_xyz_path: Optional[str | Path] = None,
+    optimization_engine: Literal["xtb", "aimnet2"] = "xtb",
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     sp_energy: Literal["gxtb", "xtb", "skala", "aimnet2"] = "gxtb",
+    recompute_solvation: bool = False,
     recompute_frequencies: bool = False,
     reuse_screening_terms: bool = True,
     keep_scratch: bool = False,
@@ -828,7 +843,7 @@ def run_protomer_solvation(
 
     Default staged behavior:
     1) Reuse existing pre-screened geometry and terms if present.
-    2) Run g-xTB gas-phase SP on current geometry.
+    2) Run 'refined' gas-phase SP (depending on provided engine) on current geometry.
     3) Combine gas SP + RRHO + solvation into final solution-phase free energy.
     Optional flags allow geometry optimization and/or recomputing solvation and frequency terms.
 
@@ -849,10 +864,10 @@ def run_protomer_solvation(
         "START",
         f"protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode}",
     )
-    _progress("preparing conformer")
+    _progress(f"preparing conformer: {conformer_mode}")
 
     conformer_energy_kcal_mol: Optional[float] = None
-    xtbopt_xyz_path: Optional[Path] = None
+    opt_xyz_path: Optional[Path] = None
     solvation_free_energy_kcal_mol: Optional[float] = None
     gas_sp_energy_kcal_mol: Optional[float] = None
     rrho_contribution_kcal_mol: Optional[float] = None
@@ -861,7 +876,7 @@ def run_protomer_solvation(
     try:
 
         if dry_run:
-            _progress("dry run enabled; skipping optimization workflow")
+            _progress("dry run enabled; skipping solvation workflow")
             _log_status(log_paths, "SKIP", "dry_run enabled; skipping xTB/g-xTB steps")
             _set_mol_prop_double(
                 protomer.mol,
@@ -894,6 +909,10 @@ def run_protomer_solvation(
 
         # reuse the energies from the previous screening step if applicable
         if reuse_screening_terms:
+            solvation_free_energy_kcal_mol = (
+                protomer.mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")
+                if protomer.mol.HasProp("screening_solvation_free_energy_kcal_mol") else solvation_free_energy_kcal_mol
+            )
             rrho_contribution_kcal_mol = (
                 protomer.mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")
                 if protomer.mol.HasProp("screening_rrho_contribution_kcal_mol") else rrho_contribution_kcal_mol
@@ -903,21 +922,29 @@ def run_protomer_solvation(
                 if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol") else gas_sp_hess_kcal_mol
             )
        
-       # compute DGsolv
-        _progress("computing solvation single point")
-        solvation_free_energy_kcal_mol = run_cpcmx_single_point(
-            scratch_dir=scratch_dir,
-            xyz_path=active_xyz_path,
-            xtb_executable=xtb_executable,
-            solvent=solvent,
-            charge=charge,
-            gfn=gfn,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-            run_command=_run,
-            log_status=_log_status,
-        )
+        # compute DGsolv only when requested or unavailable from screening.
+        if recompute_solvation or solvation_free_energy_kcal_mol is None:
+            _progress("computing solvation single point")
+            solvation_free_energy_kcal_mol = run_cpcmx_single_point(
+                scratch_dir=scratch_dir,
+                xyz_path=active_xyz_path,
+                xtb_executable=xtb_executable,
+                solvent=solvent,
+                charge=charge,
+                gfn=gfn,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
+            )
+        else:
+            _log_status(
+                log_paths,
+                "OK",
+                f"reusing screening solvation energy (kcal/mol)={solvation_free_energy_kcal_mol}",
+            )
+            _progress("reusing screening solvation single point")
 
         # compute RRHO term
         if recompute_frequencies or rrho_contribution_kcal_mol is None or gas_sp_hess_kcal_mol is None:
@@ -934,6 +961,25 @@ def run_protomer_solvation(
                 run_command=_run,
                 log_status=_log_status,
             )
+
+        # If screening optimization and requested SP use the same engine,
+        # reuse the optimization energy as SP when available.
+        reused_optimization_sp = False
+        if sp_energy == optimization_engine and reuse_screening_terms:
+            if (
+                protomer.mol.HasProp("screening_optimization_engine")
+                and protomer.mol.GetProp("screening_optimization_engine") == optimization_engine
+                and protomer.mol.HasProp("screening_optimization_energy_kcal_mol")
+            ):
+                gas_sp_energy_kcal_mol = protomer.mol.GetDoubleProp("screening_optimization_energy_kcal_mol")
+                reused_optimization_sp = True
+                _log_status(
+                    log_paths,
+                    "OK",
+                    f"reusing screening optimization energy as SP (engine={optimization_engine}) "
+                    f"gas_sp_energy_kcal_mol={gas_sp_energy_kcal_mol}",
+                )
+                _progress(f"reusing optimization energy for {optimization_engine} SP")
 
         # compute SP energy using a pluggable strategy map so additional
         # calculators can be added with minimal wiring.
@@ -987,10 +1033,11 @@ def run_protomer_solvation(
             "skala": _sp_energy_from_skala,
             "aimnet2": _sp_energy_from_aimnet2,
         }
-        try:
-            gas_sp_energy_kcal_mol = sp_energy_strategies[sp_energy]()
-        except KeyError as exc:
-            raise ValueError(f"Unknown sp_energy mode: {sp_energy}") from exc
+        if not reused_optimization_sp:
+            try:
+                gas_sp_energy_kcal_mol = sp_energy_strategies[sp_energy]()
+            except KeyError as exc:
+                raise ValueError(f"Unknown sp_energy mode: {sp_energy}") from exc
 
         # compute solution-phase free energy by adding everything together
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
@@ -1029,7 +1076,7 @@ def run_protomer_solvation(
 
         return SolvationWorkflowResult(
             conformer_energy_kcal_mol=conformer_energy_kcal_mol,
-            xtb_optimized_xyz=preserved_xtbopt_path if preserved_xtbopt_path is not None else xtbopt_xyz_path,
+            xtb_optimized_xyz=preserved_xtbopt_path if preserved_xtbopt_path is not None else opt_xyz_path,
             solvation_free_energy_kcal_mol=None,
             gas_sp_energy_kcal_mol=None,
             rrho_contribution_kcal_mol=None,
@@ -1067,7 +1114,7 @@ def run_protomer_solvation(
 
     return SolvationWorkflowResult(
         conformer_energy_kcal_mol=conformer_energy_kcal_mol,
-        xtb_optimized_xyz=final_xtbopt_path if final_xtbopt_path is not None else xtbopt_xyz_path,
+        xtb_optimized_xyz=final_xtbopt_path if final_xtbopt_path is not None else opt_xyz_path,
         solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
         gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
         rrho_contribution_kcal_mol=rrho_contribution_kcal_mol,
@@ -1139,4 +1186,3 @@ def run_species_solvation(
             **kwargs,
         )
     return results
-    
