@@ -1,6 +1,4 @@
-import re
 import shutil
-import shlex
 import subprocess
 import warnings
 
@@ -13,6 +11,14 @@ from typing import Callable, Literal, Optional
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDetermineBonds, Descriptors
 
+from .calculators import (
+    cleanup_orca_refine_scratch_keep_log,
+    run_orca_cosmo_rs,
+    run_cpcmx_single_point,
+    run_gxtb_single_point_energy,
+    run_hessian_and_parse_energies,
+    run_xtb_optimization,
+)
 from .protomer import Protomer, Species, Tautomer
 
 HARTREE_TO_KCAL_MOL = 627.5094740631
@@ -53,41 +59,6 @@ def _run(
     )
 
 
-def _float_regex() -> str:
-    # Matches:
-    #  - 1.23, -1.23
-    #  - 1, -1
-    #  - 1.23e-4, -1e3
-    return r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?"
-
-
-def _parse_first_float(patterns: list[str], text: str) -> Optional[float]:
-    for pat in patterns:
-        m = re.search(pat, text, flags=re.IGNORECASE | re.MULTILINE)
-        if m:
-            try:
-                return float(m.group(1))
-            except ValueError:
-                continue
-    return None
-    
-def _parse_last_float(patterns: list[str], text: str) -> Optional[float]:
-    """
-    Parse the last matching float for each pattern (useful when logs contain
-    iterative/intermediate energies and a final summary value).
-    """
-    for pat in patterns:
-        matches = list(re.finditer(pat, text, flags=re.IGNORECASE | re.MULTILINE))
-        if not matches:
-            continue
-        for m in reversed(matches):
-            try:
-                return float(m.group(1))
-            except ValueError:
-                continue
-    return None
-
-
 def _set_mol_prop_str(mol: Chem.Mol, key: str, value: Optional[str]) -> None:
     if value is None:
         return
@@ -111,137 +82,6 @@ def _default_spin_multiplicity(mol: Chem.Mol) -> int:
     """
     r = int(Descriptors.NumRadicalElectrons(mol))
     return max(1, r + 1)
-
-
-def _mol_h_to_orca_coord_lines(mol: Chem.Mol, *, conf_id: int = 0) -> str:
-    mol_h = Chem.AddHs(Chem.Mol(mol), addCoords=True)
-    if mol_h.GetNumConformers() == 0:
-        raise ValueError("Molecule has no conformers; cannot write ORCA coordinates.")
-    conf = mol_h.GetConformer(int(conf_id))
-    lines: list[str] = []
-    for i, atom in enumerate(mol_h.GetAtoms()):
-        p = conf.GetAtomPosition(i)
-        sym = atom.GetSymbol()
-        lines.append(f"{sym:>2}    {p.x:20.14f}       {p.y:20.14f}       {p.z:20.14f}")
-    return "\n".join(lines)
-
-
-def _parse_orca_cosmo_rs_dgsolv_kcal_mol(text: str) -> Optional[float]:
-    float_re = _float_regex()
-    kcal_token = re.compile(rf"({float_re})\s+kcal/mol", re.IGNORECASE)
-    for line in text.splitlines():
-        if "Free energy of solvation" in line and "dGsolv" in line and "kcal/mol" in line:
-            matches = list(kcal_token.finditer(line))
-            if matches:
-                try:
-                    return float(matches[-1].group(1))
-                except ValueError:
-                    continue
-    for line in text.splitlines():
-        if "dgsolv" in line.lower() and "kcal/mol" in line.lower():
-            matches = list(kcal_token.finditer(line))
-            if matches:
-                try:
-                    return float(matches[-1].group(1))
-                except ValueError:
-                    continue
-    return None
-
-
-def _parse_orca_solute_gas_phase_energy_hartree(text: str) -> Optional[float]:
-    float_re = _float_regex()
-    patterns = [
-        rf"FINAL SINGLE POINT ENERGY \(Solute-gas-phase\)\s*({float_re})",
-    ]
-    return _parse_last_float(patterns, text)
-
-
-def _run_orca_cosmo_rs(
-    *,
-    mol: Chem.Mol,
-    scratch_dir: Path,
-    charge: int,
-    multiplicity: int,
-    solvent: str,
-    orca_executable: str,
-    timeout_s: Optional[int],
-    dry_run: bool,
-    log_paths: list[Path],
-) -> tuple[Optional[float], Optional[float], str]:
-    scratch_dir.mkdir(parents=True, exist_ok=True)
-    inp_name = "cosmo_job.inp"
-    inp_path = scratch_dir / inp_name
-    coord_block = _mol_h_to_orca_coord_lines(mol)
-    inp_body = (
-        f"!COSMORS({solvent})\n"
-        f"* xyz {charge} {multiplicity}\n"
-        f"{coord_block}\n"
-        f"*\n"
-    )
-    inp_path.write_text(inp_body, encoding="utf-8")
-    _log_status(log_paths, "OK", f"wrote ORCA input {inp_path.name}")
-
-    if dry_run:
-        _log_status(log_paths, "SKIP", "dry_run; skipping ORCA COSMO-RS")
-        return None, None, ""
-
-    cmd = [orca_executable, inp_name]
-    _log_status(log_paths, "STEP", f"running ORCA COSMO-RS: {' '.join(shlex.quote(x) for x in cmd)}")
-    cp = _run(cmd, cwd=scratch_dir, timeout_s=timeout_s, dry_run=False)
-    out_path = scratch_dir / inp_name.replace(".inp", ".out")
-    merged = cp.stdout
-    if cp.stderr:
-        merged += "\n" + cp.stderr
-    if out_path.exists():
-        merged += "\n" + out_path.read_text(encoding="utf-8", errors="replace")
-
-    merged_log = scratch_dir / "orca_cosmo_run.log"
-    merged_log.write_text(merged, encoding="utf-8")
-    _log_status(log_paths, "OK", f"saved ORCA merged output to {merged_log.name}")
-
-    if cp.returncode != 0:
-        _log_status(
-            log_paths,
-            "FAIL",
-            f"ORCA failed returncode={cp.returncode} tail={merged[-800:]}",
-        )
-        return None, None, merged
-
-    dgsolv = _parse_orca_cosmo_rs_dgsolv_kcal_mol(merged)
-    if dgsolv is None:
-        _log_status(log_paths, "WARN", "could not parse dGsolv (kcal/mol) from ORCA output")
-    else:
-        _log_status(log_paths, "OK", f"parsed ORCA dGsolv_kcal_mol={dgsolv}")
-    gas_sp_h = _parse_orca_solute_gas_phase_energy_hartree(merged)
-    if gas_sp_h is None:
-        _log_status(log_paths, "WARN", "could not parse ORCA solute gas-phase SP energy (Hartree)")
-    else:
-        _log_status(log_paths, "OK", f"parsed ORCA solute gas-phase SP (Hartree)={gas_sp_h}")
-    return dgsolv, gas_sp_h, merged
-
-
-def _cleanup_orca_refine_scratch_keep_log(scratch_dir: Path, 
-    keep_scratch: bool = False,
-    *,
-    log_paths: list[Path],
-) -> None:
-    """
-    Keep only ``orca_cosmo_run.log`` in ORCA refine scratch.
-    """
-    keep_name = "orca_cosmo_run.log"
-    if not scratch_dir.exists() or keep_scratch:
-        return
-    for entry in scratch_dir.iterdir():
-        if entry.name == keep_name:
-            continue
-        try:
-            if entry.is_dir():
-                shutil.rmtree(entry, ignore_errors=True)
-            else:
-                entry.unlink(missing_ok=True)
-        except Exception as exc:
-            _log_status(log_paths, "WARN", f"failed to remove ORCA refine artifact {entry.name}: {exc}")
-    _log_status(log_paths, "CLEANUP", f"kept only {keep_name} in {scratch_dir}")
 
 
 def refine_protomer_solvation_with_orca_cosmors(
@@ -287,7 +127,7 @@ def refine_protomer_solvation_with_orca_cosmors(
         except ValueError:
             pass
 
-    dgsolv, gas_sp_orca_h, _merged = _run_orca_cosmo_rs(
+    dgsolv, gas_sp_orca_h, _merged = run_orca_cosmo_rs(
         mol=mol,
         scratch_dir=scratch,
         charge=charge,
@@ -297,8 +137,15 @@ def refine_protomer_solvation_with_orca_cosmors(
         timeout_s=timeout_s,
         dry_run=dry_run,
         log_paths=lp,
+        run_command=_run,
+        log_status=_log_status,
     )
-    _cleanup_orca_refine_scratch_keep_log(scratch, keep_scratch=keep_scratch, log_paths=lp)
+    cleanup_orca_refine_scratch_keep_log(
+        scratch,
+        keep_scratch=keep_scratch,
+        log_paths=lp,
+        log_status=_log_status,
+    )
     if dgsolv is None:
         return None
 
@@ -415,82 +262,6 @@ def _mol_to_xyz_block(mol: Chem.Mol, *, conf_id: int = 0) -> str:
 def _write_xyz(mol: Chem.Mol, path: Path, *, conf_id: int = 0) -> None:
     xyz = _mol_to_xyz_block(mol, conf_id=conf_id)
     path.write_text(xyz)
-
-
-def _build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: float = 1.05) -> int:
-    """
-    Build xTB xcontrol constraints for positively charged zwitterionic X-H sites.
-
-    For each heavy atom with formal charge +1 that is bonded to at least one
-    hydrogen, write:
-      $constrain
-       distance: X_idx, H_idx, <fixed_distance>
-      $end
-
-    Bond distances are selected by heavy-atom element symbol where available.
-    If no element-specific entry exists, ``fixed_distance`` is used.
-
-    Returns number of generated distance constraints.
-    """
-    mol_h = Chem.AddHs(Chem.Mol(mol), addCoords=True)
-    constraints: list[str] = []
-    zwitterion_xh_distance_by_symbol = {
-        "N": 1.03,
-    }
-
-    for atom in mol_h.GetAtoms():
-        if atom.GetAtomicNum() == 1:
-            continue
-        if atom.GetFormalCharge() != 1:
-            continue
-
-        h_neighbors = [nbr for nbr in atom.GetNeighbors() if nbr.GetAtomicNum() == 1]
-        if not h_neighbors:
-            continue
-
-        heavy_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
-        constrained_distance = zwitterion_xh_distance_by_symbol.get(
-            atom.GetSymbol(),
-            fixed_distance,
-        )
-        for h_atom in h_neighbors:
-            h_idx = h_atom.GetIdx() + 1
-            constraints.append(f" distance: {heavy_idx},{h_idx},{constrained_distance:.2f}")
-
-    if constraints:
-        content = "$constrain\n" + "\n".join(constraints) + "\n$end\n"
-        xcontrol_path.write_text(content)
-    elif xcontrol_path.exists():
-        xcontrol_path.unlink()
-
-    return len(constraints)
-
-
-def _parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
-    float_re = _float_regex()
-    patterns = [
-        rf"total energy[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-    ]
-    return _parse_last_float(patterns, text)
-
-
-def _parse_xtb_solvent_free_energy_hartree(
-    text: str) -> Optional[float]:
-    float_re = _float_regex()
-    patterns = [
-        rf"solvation free energy \(dG_solv\):[\ \t]*({float_re})",
-    ]
-    return _parse_last_float(patterns, text)
-
-
-def _parse_xtb_rrho_contrib(text: str) -> Optional[float]:
-    float_re = _float_regex()
-    patterns = [
-        # xTB RRHO summary line, e.g.:
-        # :: G(RRHO) contrib.            0.047744476512 Eh   ::
-        rf"G\(RRHO\)[^\S\r\n]*contrib\.?[^\S\r\n]*[:=]?[^\S\r\n]*({float_re})",
-    ]
-    return _parse_last_float(patterns, text)
 
 
 @dataclass(frozen=True)
@@ -614,89 +385,6 @@ def _write_workflow_inputs(mol: Chem.Mol, scratch_dir: Path, charge: int, log_pa
     return input_xyz_path
 
 
-def _run_xtb_optimization(
-    *,
-    mol: Chem.Mol,
-    scratch_dir: Path,
-    input_xyz_path: Path,
-    xtb_executable: str,
-    opt_level: str,
-    charge: int,
-    solvent: str,
-    timeout_s: Optional[int],
-    dry_run: bool,
-    log_paths: list[Path],
-) -> tuple[Path, Optional[float], Optional[float]]:
-    xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
-    xcontrol_path = scratch_dir / "xcontrol.inp"
-    n_constraints = _build_fix_xcontrol(
-        mol,
-        xcontrol_path,
-        fixed_distance=1.01,
-    )
-
-    input_flag = ""
-    if n_constraints > 0:
-        input_flag = f" --input {shlex.quote(xcontrol_path.name)}"
-        _log_status(
-            log_paths,
-            "OK",
-            "generated xcontrol constraints for positively charged heavy-atom X-H bonds: "
-            f"n_constraints={n_constraints}",
-        )
-    else:
-        _log_status(log_paths, "OK", "no positively charged heavy-atom X-H constraints generated")
-
-    cmd_opt = (
-        f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
-        f"{input_flag} "
-        f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)} "
-        f"--charge {shlex.quote(str(charge))}"
-    )
-    _log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
-    cp_opt = _run(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
-    if not dry_run:
-        optimization_log_path = scratch_dir / "xtbopt_run.log"
-        optimization_log_path.write_text(cp_opt.stdout)
-        _log_status(log_paths, "OK", f"saved optimization stdout to {optimization_log_path.name}")
-    if cp_opt.returncode != 0:
-        _log_status(
-            log_paths,
-            "FAIL",
-            f"optimization failed returncode={cp_opt.returncode} stdout_tail={cp_opt.stdout[-1000:]} stderr_tail={cp_opt.stderr[-1000:]}",
-        )
-        raise RuntimeError(
-            f"xTB optimization failed with code {cp_opt.returncode}.\n"
-            f"stdout:\n{cp_opt.stdout[-4000:]}\n"
-            f"stderr:\n{cp_opt.stderr[-4000:]}\n"
-        )
-    if not xtbopt_xyz_path.exists():
-        _log_status(log_paths, "FAIL", "optimization finished but xtbopt.xyz was not produced")
-        raise FileNotFoundError("Expected output xtbopt.xyz was not produced by xTB.")
-
-    _log_status(log_paths, "OK", f"optimization produced {xtbopt_xyz_path.name}")
-
-    # Parse gas-phase SP energy directly from optimization output/log.
-    parse_text = cp_opt.stdout
-    xtbopt_log_path = scratch_dir / "xtbopt.log"
-    if xtbopt_log_path.exists():
-        parse_text += "\n" + xtbopt_log_path.read_text()
-
-    gas_sp_energy_h = _parse_xtb_total_energy_hartree(parse_text)
-    gas_sp_energy_kcal_mol = None
-    if gas_sp_energy_h is not None:
-        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
-    else:
-        warnings.warn(
-            "Could not parse TOTAL ENERGY from optimization output/log. "
-            "Gas-phase energy will remain None.",
-            RuntimeWarning,
-        )
-        _log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from optimization output/log")
-
-    return xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h
-
-
 def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
     """
     Return all-atom connectivity as undirected atom-index pairs.
@@ -774,161 +462,6 @@ def _update_protomer_geometry_from_xyz(
         "mol coordinates may be stale — downstream xTB/ORCA still use the xyz file on disk when provided.",
     )
     return None, False
-
-def _run_cpcmx_single_point(
-    *,
-    scratch_dir: Path,
-    xtbopt_xyz_path: Path,
-    xtb_executable: str,
-    solvent: str,
-    charge: int,
-    gfn: int,
-    timeout_s: Optional[int],
-    dry_run: bool,
-    log_paths: list[Path],
-) -> Optional[float]:
-    cmd_sp = [
-        xtb_executable,
-        str(xtbopt_xyz_path.name),
-        "--cpcmx",
-        solvent,
-        "--chrg",
-        str(charge),
-        "--gfn",
-        str(gfn),
-    ]
-    _log_status(log_paths, "STEP", f"running CPCM-X SP: {' '.join(shlex.quote(x) for x in cmd_sp)}")
-    cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
-    if not dry_run:
-        solvation_log_path = scratch_dir / "xtbsolv_run.log"
-        solvation_log_path.write_text(cp_sp.stdout)
-        _log_status(log_paths, "OK", f"saved CPCM-X stdout to {solvation_log_path.name}")
-    if cp_sp.returncode != 0:
-        _log_status(
-            log_paths,
-            "FAIL",
-            f"CPCM-X SP failed returncode={cp_sp.returncode} stdout_tail={cp_sp.stdout[-1000:]} stderr_tail={cp_sp.stderr[-1000:]}",
-        )
-        raise RuntimeError(
-            f"xTB CPCM-X SP calculation failed with code {cp_sp.returncode}.\n"
-            f"stdout:\n{cp_sp.stdout[-4000:]}\n"
-            f"stderr:\n{cp_sp.stderr[-4000:]}\n"
-        )
-
-    solvation_free_energy_h = _parse_xtb_solvent_free_energy_hartree(cp_sp.stdout)
-
-    solvation_free_energy_kcal_mol = None
-    if solvation_free_energy_h is not None:
-        solvation_free_energy_kcal_mol = solvation_free_energy_h * HARTREE_TO_KCAL_MOL
-
-    _log_status(
-        log_paths,
-        "OK",
-        f"parsed solvation_free_energy_kcal_mol={solvation_free_energy_kcal_mol}",
-    )
-    return solvation_free_energy_kcal_mol
-
-
-def _run_gxtb_single_point_energy(
-    *,
-    scratch_dir: Path,
-    xtbopt_xyz_path: Path,
-    xtb_executable: str,
-    charge: int,
-    timeout_s: Optional[int],
-    dry_run: bool,
-    log_paths: list[Path],
-) -> tuple[Optional[float], Optional[float]]:
-    cmd_sp = (
-        f"{shlex.quote(xtb_executable)} {shlex.quote(xtbopt_xyz_path.name)} "
-        f'--driver "gxtb -grad -c xtbdriver.xyz" '
-        f"--chrg {shlex.quote(str(charge))}"
-    )
-    _log_status(log_paths, "STEP", f"running g-xTB gas-phase SP via driver: {cmd_sp}")
-    cp_sp = _run(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
-    if not dry_run:
-        gxtbsp_log_path = scratch_dir / "gxtbsp_run.log"
-        gxtbsp_log_path.write_text(cp_sp.stdout)
-        _log_status(log_paths, "OK", f"saved g-xTB SP stdout to {gxtbsp_log_path.name}")
-    if cp_sp.returncode != 0:
-        _log_status(
-            log_paths,
-            "FAIL",
-            f"g-xTB SP failed returncode={cp_sp.returncode} stdout_tail={cp_sp.stdout[-1000:]} stderr_tail={cp_sp.stderr[-1000:]}",
-        )
-        raise RuntimeError(
-            f"g-xTB gas-phase SP calculation failed with code {cp_sp.returncode}.\n"
-            f"stdout:\n{cp_sp.stdout[-4000:]}\n"
-            f"stderr:\n{cp_sp.stderr[-4000:]}\n"
-        )
-
-    gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_sp.stdout)
-    gas_sp_energy_kcal_mol = None
-    if gas_sp_energy_h is not None:
-        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
-    else:
-        warnings.warn(
-            "Could not parse TOTAL ENERGY from g-xTB SP output. "
-            "Gas-phase energy will remain None.",
-            RuntimeWarning,
-        )
-        _log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from g-xTB SP output")
-
-    return gas_sp_energy_kcal_mol, gas_sp_energy_h
-
-
-def _run_hessian_and_parse_energies(
-    *,
-    scratch_dir: Path,
-    xtbopt_xyz_path: Path,
-    xtb_executable: str,
-    charge: int,
-    gfn: int,
-    timeout_s: Optional[int],
-    dry_run: bool,
-    log_paths: list[Path],
-) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    cmd_hess = [
-        xtb_executable,
-        str(xtbopt_xyz_path.name),
-        "--hess",
-        "--chrg",
-        str(charge),
-        "--gfn",
-        str(gfn),
-    ]
-    _log_status(log_paths, "STEP", f"running hessian: {' '.join(shlex.quote(x) for x in cmd_hess)}")
-    cp_hess = _run(cmd_hess, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
-    if not dry_run:
-        frequency_log_path = scratch_dir / "xtbfreq_run.log"
-        frequency_log_path.write_text(cp_hess.stdout)
-        _log_status(log_paths, "OK", f"saved frequency stdout to {frequency_log_path.name}")
-    if cp_hess.returncode != 0:
-        _log_status(
-            log_paths,
-            "FAIL",
-            f"hessian failed returncode={cp_hess.returncode} stdout_tail={cp_hess.stdout[-1000:]} stderr_tail={cp_hess.stderr[-1000:]}",
-        )
-        raise RuntimeError(
-            f"xTB hess calculation failed with code {cp_hess.returncode}.\n"
-            f"stdout:\n{cp_hess.stdout[-4000:]}\n"
-            f"stderr:\n{cp_hess.stderr[-4000:]}\n"
-        )
-
-    gas_sp_energy_h = _parse_xtb_total_energy_hartree(cp_hess.stdout)
-    rrho_contrib_h = _parse_xtb_rrho_contrib(cp_hess.stdout)
-
-    gas_sp_energy_kcal_mol = None
-
-    if gas_sp_energy_h is not None:
-        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
-
-    rrho_contrib_kcal_mol = None
-    if rrho_contrib_h is not None:
-        rrho_contrib_kcal_mol = rrho_contrib_h * HARTREE_TO_KCAL_MOL
-
-    return gas_sp_energy_kcal_mol, rrho_contrib_kcal_mol, gas_sp_energy_h
-
 
 def _compute_solution_phase_energy(
     gas_sp_energy_kcal_mol: Optional[float],
@@ -1126,7 +659,7 @@ def run_protomer_screening(
         )
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
         _progress("optimizing screening geometry")
-        xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = _run_xtb_optimization(
+        xtbopt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_xtb_optimization(
             mol=mol,
             scratch_dir=scratch_dir,
             input_xyz_path=input_xyz_path,
@@ -1137,6 +670,8 @@ def run_protomer_screening(
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
         )
         _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
             protomer,
@@ -1152,9 +687,9 @@ def run_protomer_screening(
             )
 
         _progress("computing screening solvation single point")
-        solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
+        solvation_free_energy_kcal_mol = run_cpcmx_single_point(
             scratch_dir=scratch_dir,
-            xtbopt_xyz_path=active_xyz_path,
+            xyz_path=active_xyz_path,
             xtb_executable=xtb_executable,
             solvent=solvent,
             charge=charge,
@@ -1162,18 +697,22 @@ def run_protomer_screening(
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
         )
 
         _progress("computing screening frequencies")
-        gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _ = _run_hessian_and_parse_energies(
+        gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _ = run_hessian_and_parse_energies(
             scratch_dir=scratch_dir,
-            xtbopt_xyz_path=active_xyz_path,
+            xyz_path=active_xyz_path,
             xtb_executable=xtb_executable,
             charge=charge,
             gfn=gfn,
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
         )
 
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
@@ -1259,7 +798,6 @@ def run_protomer_solvation(
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     xtb_executable: str = "xtb",
     sp_energy: Literal["gxtb", "xtb"] = "gxtb",
-    recompute_solvation: bool = False,
     recompute_frequencies: bool = False,
     reuse_screening_terms: bool = True,
     keep_scratch: bool = False,
@@ -1299,7 +837,6 @@ def run_protomer_solvation(
 
     conformer_energy_kcal_mol: Optional[float] = None
     xtbopt_xyz_path: Optional[Path] = None
-    xtbopt_xyz_block: Optional[str] = None
     solvation_free_energy_kcal_mol: Optional[float] = None
     gas_sp_energy_kcal_mol: Optional[float] = None
     rrho_contribution_kcal_mol: Optional[float] = None
@@ -1341,10 +878,6 @@ def run_protomer_solvation(
 
         # reuse the energies from the previous screening step if applicable
         if reuse_screening_terms:
-            solvation_free_energy_kcal_mol = (
-                protomer.mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")
-                if protomer.mol.HasProp("screening_solvation_free_energy_kcal_mol") else solvation_free_energy_kcal_mol
-            )
             rrho_contribution_kcal_mol = (
                 protomer.mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")
                 if protomer.mol.HasProp("screening_rrho_contribution_kcal_mol") else rrho_contribution_kcal_mol
@@ -1355,50 +888,65 @@ def run_protomer_solvation(
             )
        
        # compute DGsolv
-        if recompute_solvation or solvation_free_energy_kcal_mol is None:
-            _progress("computing solvation single point")
-            solvation_free_energy_kcal_mol = _run_cpcmx_single_point(
-                scratch_dir=scratch_dir,
-                xtbopt_xyz_path=active_xyz_path,
-                xtb_executable=xtb_executable,
-                solvent=solvent,
-                charge=charge,
-                gfn=gfn,
-                timeout_s=timeout_s,
-                dry_run=dry_run,
-                log_paths=log_paths,
-            )
+        _progress("computing solvation single point")
+        solvation_free_energy_kcal_mol = run_cpcmx_single_point(
+            scratch_dir=scratch_dir,
+            xyz_path=active_xyz_path,
+            xtb_executable=xtb_executable,
+            solvent=solvent,
+            charge=charge,
+            gfn=gfn,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
+        )
 
         # compute RRHO term
         if recompute_frequencies or rrho_contribution_kcal_mol is None or gas_sp_hess_kcal_mol is None:
             _progress("computing frequencies")
-            gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_hess_h = _run_hessian_and_parse_energies(
+            gas_sp_hess_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_hess_h = run_hessian_and_parse_energies(
                 scratch_dir=scratch_dir,
-                xtbopt_xyz_path=active_xyz_path,
+                xyz_path=active_xyz_path,
                 xtb_executable=xtb_executable,
                 charge=charge,
                 gfn=gfn,
                 timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
             )
 
-        # compute SP energy
-        if sp_energy == "gxtb":
+        # compute SP energy using a pluggable strategy map so additional
+        # calculators (MLFF?) can be added with minimal wiring.
+        def _sp_energy_from_gxtb() -> Optional[float]:
             _progress("computing gas-phase single point")
-            gas_sp_energy_kcal_mol, _ = _run_gxtb_single_point_energy(
+            value_kcal_mol, _ = run_gxtb_single_point_energy(
                 scratch_dir=scratch_dir,
-                xtbopt_xyz_path=active_xyz_path,
+                xyz_path=active_xyz_path,
                 xtb_executable=xtb_executable,
                 charge=charge,
                 timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
             )
-        elif sp_energy == "xtb":
-            gas_sp_energy_kcal_mol = gas_sp_hess_kcal_mol
-        else:
-            raise ValueError(f"Unknown sp_energy mode: {sp_energy}")
+            return value_kcal_mol
+
+        def _sp_energy_from_xtb_hessian() -> Optional[float]:
+            return gas_sp_hess_kcal_mol
+
+        sp_energy_strategies: dict[str, Callable[[], Optional[float]]] = {
+            "gxtb": _sp_energy_from_gxtb,
+            "xtb": _sp_energy_from_xtb_hessian,
+        }
+        try:
+            gas_sp_energy_kcal_mol = sp_energy_strategies[sp_energy]()
+        except KeyError as exc:
+            raise ValueError(f"Unknown sp_energy mode: {sp_energy}") from exc
 
         # compute solution-phase free energy by adding everything together
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(

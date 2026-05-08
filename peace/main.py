@@ -441,7 +441,6 @@ if __name__ == "__main__":
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         sp_energy=args.sp_energy,
-                        recompute_solvation=False,
                         recompute_frequencies=False,
                         reuse_screening_terms=True,
                         dry_run=bool(args.dry_run),
