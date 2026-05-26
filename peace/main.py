@@ -1,6 +1,6 @@
-from peace.protomer import Species, Tautomer
+from peace.protomer import Protomer, Species, Tautomer
 from peace.engine import ChargeEngine
-from peace.common import show_images, protonate_at_site, deprotonate_at_site
+from peace.common import canon_smiles, show_images, protonate_at_site, deprotonate_at_site
 from peace import visualization
 from peace import __version__
 from datetime import datetime
@@ -172,6 +172,59 @@ def _make_species(smiles: str, *, engine: ChargeEngine) -> Species:
     return spec
 
 
+def _make_species_from_protomer_pool(
+    seed_smiles_list: list[str],
+    *,
+    engine: ChargeEngine,
+) -> Species:
+    """Build a species from multiple protomer seeds, deduplicated, in tautomer 0."""
+    unique_smiles = list(
+        dict.fromkeys(canon_smiles(s) for s in seed_smiles_list if canon_smiles(s) is not None)
+    )
+    if not unique_smiles:
+        raise ValueError("Protomer pool is empty after canonicalization.")
+
+    spec = _make_species(unique_smiles[0], engine=engine)
+    base_taut = spec.tautomers[0]
+    for smiles in unique_smiles[1:]:
+        base_taut.embed_protomer(Protomer.from_smiles(smiles))
+    return spec
+
+
+def _collect_charge_shifts_from_protomer(
+    protomer: Protomer,
+    *,
+    engine: ChargeEngine,
+    charge_step: int,
+) -> list[str]:
+    """Return canonical SMILES for all distinct one-step charge shifts at any matching site."""
+    if protomer.mol is None:
+        return []
+
+    search_type = "acidic" if charge_step < 0 else "basic"
+    trial_taut = Tautomer.from_mol(copy.deepcopy(protomer.mol))
+    sites = engine.search_ionization_centers(trial_taut, search_type)
+    if not sites:
+        return []
+
+    shifted_smiles: list[str] = []
+    for site in sites:
+        shifted_mol = copy.deepcopy(protomer.mol)
+        if charge_step < 0:
+            atom = shifted_mol.GetAtomWithIdx(site)
+            if atom.GetTotalNumHs(includeNeighbors=False) <= 0:
+                continue
+            deprotonate_at_site(shifted_mol, site)
+        else:
+            protonate_at_site(shifted_mol, site)
+
+        shifted = canon_smiles(AllChem.MolToSmiles(shifted_mol))
+        if shifted is not None:
+            shifted_smiles.append(shifted)
+
+    return list(dict.fromkeys(shifted_smiles))
+
+
 def _enumerate_species_protomers(spec: Species, *, engine: ChargeEngine) -> None:
     tautomer_items = list(spec.tautomers.items())
     _log(f"Tautomer enumeration complete: {len(tautomer_items)} tautomer(s) found")
@@ -184,7 +237,7 @@ def _enumerate_species_protomers(spec: Species, *, engine: ChargeEngine) -> None
         # Iterative protomer expansion:
         # each newly discovered protomer becomes a seed to discover additional
         # protonation/deprotonation combinations (supports multi-zwitterions).
-        seed_queue = [taut.protomers[0]]
+        seed_queue = list(taut.protomers.values())
         processed_seed_smiles = set()
         round_idx = 0
 
@@ -227,28 +280,22 @@ def _seed_adjacent_charge_species(
     if charge_step not in (-1, 1):
         raise ValueError("charge_step must be -1 or +1")
 
-    search_type = "acidic" if charge_step < 0 else "basic"
-    for _taut_idx, taut in source_spec.tautomers.items():
-        for _prot_idx, protomer in taut.protomers.items():
-            if protomer.mol is None:
-                continue
-            trial_taut = Tautomer.from_mol(copy.deepcopy(protomer.mol))
-            sites = engine.search_ionization_centers(trial_taut, search_type)
-            if not sites:
-                continue
-            selected_site = sites[0]
-            shifted_mol = copy.deepcopy(protomer.mol)
-            if charge_step < 0:
-                atom = shifted_mol.GetAtomWithIdx(selected_site)
-                local_h = atom.GetTotalNumHs(includeNeighbors=False)
-                if local_h <= 0:
-                    continue
-                deprotonate_at_site(shifted_mol, selected_site)
-            else:
-                protonate_at_site(shifted_mol, selected_site)
-            shifted_smiles = AllChem.MolToSmiles(shifted_mol)
-            return _make_species(shifted_smiles, engine=engine)
-    return None
+    source_taut = source_spec.tautomers[0]
+    shifted_smiles: list[str] = []
+    for protomer in source_taut.protomers.values():
+        shifted_smiles.extend(
+            _collect_charge_shifts_from_protomer(protomer, engine=engine, charge_step=charge_step)
+        )
+
+    if not shifted_smiles:
+        return None
+
+    unique_count = len(dict.fromkeys(shifted_smiles))
+    _log(
+        f"  Charge-shift pool from tautomer 0: {len(source_taut.protomers)} source protomer(s) "
+        f"-> {len(shifted_smiles)} shift(s), {unique_count} unique"
+    )
+    return _make_species_from_protomer_pool(shifted_smiles, engine=engine)
 
 
 def _ts() -> str:
