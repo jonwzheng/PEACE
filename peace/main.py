@@ -1,6 +1,7 @@
 from peace.protomer import Species, Tautomer
 from peace.engine import ChargeEngine
 from peace.common import show_images, protonate_at_site, deprotonate_at_site
+from peace import visualization
 from peace import __version__
 from datetime import datetime
 import time
@@ -41,6 +42,31 @@ def _build_cli_parser():
         help="Preserve run stdout logs into a separate log folder after each run.",
     )
     p.add_argument("--no-plot", action="store_true", help="Skip RDKit image rendering.")
+    p.add_argument(
+        "--plot",
+        type=str,
+        default="default",
+        choices=["default", "cutoff", "count"],
+        help=(
+            "Protomer plot mode: all protomer/tautomer pairs (default), "
+            "Boltzmann fraction cutoff (cutoff), or lowest-energy top-N (count)."
+        ),
+    )
+    p.add_argument(
+        "--plot-filter",
+        type=float,
+        default=None,
+        help=(
+            "For --plot=cutoff: minimum boltzmann_fraction to include. "
+            "For --plot=count: number of lowest-energy protomers to plot."
+        ),
+    )
+    p.add_argument(
+        "--plot-from-csv",
+        type=str,
+        default=None,
+        help="Render protomer plots from an existing results CSV and exit (no enumeration/solvation).",
+    )
     p.add_argument(
         "--conformer-mode",
         type=str,
@@ -275,6 +301,36 @@ if __name__ == "__main__":
         parser.error("--charge-min must be <= --charge-max")
     if args.refine and not args.solvation:
         parser.error("--refine requires --solvation")
+    if args.plot in ("cutoff", "count") and args.plot_filter is None:
+        parser.error(f"--plot-filter is required when --plot={args.plot}")
+    if args.plot_from_csv and args.no_plot:
+        parser.error("--plot-from-csv cannot be combined with --no-plot")
+
+    if args.plot_from_csv:
+        _log(_header_banner())
+        _log(f"Version: {__version__}")
+        csv_path = Path(args.plot_from_csv)
+        if not csv_path.is_file():
+            parser.error(f"--plot-from-csv file not found: {csv_path}")
+        _log(f"Rendering protomer plots from CSV: {csv_path.resolve()}")
+        _log(f"Plotmode: {args.plot}")
+        if args.plot_filter is not None:
+            _log(f"Plot filter: {args.plot_filter}")
+        df_plot = pd.read_csv(csv_path)
+        imgs = visualization.plot_from_dataframe(
+            df_plot,
+            mode=args.plot,
+            plot_filter=args.plot_filter,
+            n_columns=5,
+        )
+        if imgs:
+            show_images(imgs, mode="vertical")
+        else:
+            _log("No protomer images produced (empty filter or empty CSV).")
+        end_ts = time.time()
+        _log(f"Run finished at: {_ts()}")
+        _log(f"Execution time: {end_ts - start_ts:.2f} s")
+        raise SystemExit(0)
     run_started_at = _ts()
     _log(_header_banner())
     _log(f"Version: {__version__}")
@@ -659,9 +715,22 @@ if __name__ == "__main__":
     if not args.no_plot:
         for charge_state in requested_charges:
             spec = species_by_charge[charge_state]
-            _log(f"Rendering protomer plots for charge={charge_state}")
-            imgs = spec.generate_protomer_plot(n_columns=5)
-            show_images(imgs, mode="vertical")
+            _log(
+                f"Rendering protomer plots for charge={charge_state} "
+                f"(mode={args.plot}"
+                + (f", filter={args.plot_filter})" if args.plot_filter is not None else ")")
+            )
+            imgs = visualization.plot_from_species(
+                spec,
+                formal_charge=int(charge_state),
+                mode=args.plot,
+                plot_filter=args.plot_filter,
+                n_columns=5,
+            )
+            if imgs:
+                show_images(imgs, mode="vertical")
+            else:
+                _log("No protomer images produced for this charge state.")
     frames = []
     for charge_state in requested_charges:
         spec = species_by_charge[charge_state]

@@ -1,4 +1,4 @@
-from rdkit.Chem import AllChem, Mol, Draw
+from rdkit.Chem import AllChem, Mol
 from .common import protonate_at_site, deprotonate_at_site, extract_matches_from_smarts_collection, canon_smiles
 
 import copy
@@ -204,46 +204,6 @@ class Tautomer:
             self.protomers[idx] = protomer
             return True
 
-    def generate_protomer_plot(self, n_columns : int):
-        """ Plots up to n_columns showing the mol objects. Returns an image."""
-        # Prefer the original input molecular graph for display because optimized xyz
-        # geometries can lack bond assignment.
-        mols = []
-        for p in self.protomers.values():
-            display_mol = p.input_mol if p.input_mol is not None else p.mol
-            if display_mol is not None:
-                display_mol = copy.deepcopy(display_mol)
-                display_mol.__sssAtoms = p.ionization_sites
-            mols.append(display_mol)
-        n_rows = int(np.ceil(len(mols) / n_columns))
-        n_padding = n_rows * n_columns - len(mols)
-        mols.extend([None]*n_padding)
-
-        # show also the microstate populations if available
-        legends = []
-        for k, v in self.protomers.items():
-            if v.mol.HasProp('boltzmann_fraction'):
-                f_i = f"f_i: {float(v.mol.GetProp('boltzmann_fraction')):.4f}"
-            else:
-                f_i = ""
-            legends.append(f"ID: {k} | SMILES: {v.smiles}\n {f_i}")
-        legends.extend([""]*n_padding)
-
-        highlights = [protomer.ionization_sites for protomer in self.protomers.values()]
-        highlights.extend([[] for _ in range(n_padding)])
-        highlights_array = np.array(highlights, dtype=object)
-
-        mols = np.reshape(mols, (n_rows, n_columns))
-        legends = np.reshape(legends, (n_rows, n_columns))
-        if highlights_array.size != 0:
-            highlights = highlights_array.reshape(n_rows, n_columns).tolist()            
-            img = Draw.MolsMatrixToGridImage(molsMatrix=mols.tolist(), legendsMatrix=legends.tolist(),
-                                            subImgSize=(300, 200), highlightAtomListsMatrix=highlights)
-        else:
-            img = Draw.MolsMatrixToGridImage(molsMatrix=mols.tolist(), legendsMatrix=legends.tolist(),
-                                            subImgSize=(300, 200))
-        return img 
-
 class Species:
     """
     Contains enumerations of tautomers for a given compound.
@@ -420,9 +380,3 @@ class Species:
                 rows.append(row)
 
         return pd.DataFrame(rows)
-    
-    def generate_protomer_plot(self, n_columns: int = 5):
-        imgs = []
-        for tautomer in self.tautomers.values():
-            imgs.append(tautomer.generate_protomer_plot(n_columns))
-        return imgs
