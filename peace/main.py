@@ -110,18 +110,19 @@ def _build_cli_parser():
     p.add_argument(
         "--xtb-version",
         type=str,
-        default="xtb2",
-        choices=["xtb", "xtb2"],
+        default="default",
+        choices=["legacy", "default"],
         help=(
-            "xTB feature version for solvation/optimization binaries: "
-            "'xtb' (legacy g-xTB driver) or 'xtb2' (with native --gxtb flag)."
+            "xTB CLI dialect for g-xTB and related calls: "
+            "'legacy' (--driver gxtb ...) or 'default' (native --gxtb). "
+            "Must match the binary passed to --xtb-executable."
         ),
     )
     p.add_argument(
         "--xtb-executable",
         type=str,
-        default=None,
-        help="Override xTB executable name or path (default: same as --xtb-version).",
+        default="xtb",
+        help="xTB binary name or path (required with --solvation; must match --xtb-version).",
     )
     p.add_argument(
         "--recompute-solvation",

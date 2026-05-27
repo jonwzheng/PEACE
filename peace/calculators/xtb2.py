@@ -31,7 +31,7 @@ def run_gxtb_single_point_energy(
     *,
     scratch_dir: Path,
     xyz_path: Path,
-    xtb_executable: str = "xtb2",
+    xtb_executable: str,
     charge: int,
     timeout_s: Optional[int],
     dry_run: bool,
