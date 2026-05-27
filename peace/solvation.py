@@ -18,6 +18,7 @@ from .calculators import (
     run_orca_cosmo_rs,
     run_cpcmx_single_point,
     run_gxtb_single_point_energy,
+    run_gxtb2_single_point_energy,
     run_hessian_and_parse_energies,
     run_skala_single_point_energy,
     run_xtb_optimization,
@@ -25,6 +26,18 @@ from .calculators import (
 from .protomer import Protomer, Species, Tautomer
 
 HARTREE_TO_KCAL_MOL = 627.5094740631
+
+XtbVersion = Literal["xtb", "xtb2"]
+
+
+def _default_xtb_executable(xtb_version: XtbVersion) -> str:
+    return xtb_version
+
+
+def _resolve_gxtb_single_point_runner(xtb_version: XtbVersion):
+    if xtb_version == "xtb2":
+        return run_gxtb2_single_point_energy
+    return run_gxtb_single_point_energy
 
 def _append_log(log_path: Path, message: str) -> None:
     timestamp = datetime.now().isoformat(timespec="seconds")
@@ -605,7 +618,8 @@ def run_protomer_screening(
     gfn: int = 2,
     optimization_engine: Literal["xtb", "aimnet2"] = "xtb",
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
-    xtb_executable: str = "xtb",
+    xtb_version: XtbVersion = "xtb",
+    xtb_executable: Optional[str] = None,
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -630,6 +644,7 @@ def run_protomer_screening(
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
     log_paths = scratch_context.log_paths
+    resolved_xtb_executable = xtb_executable or _default_xtb_executable(xtb_version)
 
     if protomer.mol is None:
         raise ValueError("Protomer does not have mol; cannot run screening workflow.")
@@ -637,7 +652,7 @@ def run_protomer_screening(
     _log_status(
         log_paths,
         "START",
-        f"screening protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode}",
+        f"screening protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode} xtb_version={xtb_version}",
     )
     _progress("preparing conformer")
 
@@ -673,7 +688,7 @@ def run_protomer_screening(
                 mol=mol,
                 scratch_dir=scratch_dir,
                 input_xyz_path=input_xyz_path,
-                xtb_executable=xtb_executable,
+                xtb_executable=resolved_xtb_executable,
                 solvent=solvent,
                 opt_level=opt_level,
                 charge=charge,
@@ -712,7 +727,7 @@ def run_protomer_screening(
         solvation_free_energy_kcal_mol = run_cpcmx_single_point(
             scratch_dir=scratch_dir,
             xyz_path=active_xyz_path,
-            xtb_executable=xtb_executable,
+            xtb_executable=resolved_xtb_executable,
             solvent=solvent,
             charge=charge,
             gfn=gfn,
@@ -727,7 +742,7 @@ def run_protomer_screening(
         gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _ = run_hessian_and_parse_energies(
             scratch_dir=scratch_dir,
             xyz_path=active_xyz_path,
-            xtb_executable=xtb_executable,
+            xtb_executable=resolved_xtb_executable,
             charge=charge,
             gfn=gfn,
             timeout_s=timeout_s,
@@ -819,7 +834,8 @@ def run_protomer_solvation(
     solvent: Literal["water"] = "water",
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
-    xtb_executable: str = "xtb",
+    xtb_version: XtbVersion = "xtb",
+    xtb_executable: Optional[str] = None,
     sp_energy: Literal["gxtb", "xtb", "skala", "aimnet2"] = "gxtb",
     recompute_solvation: bool = False,
     recompute_frequencies: bool = False,
@@ -848,6 +864,7 @@ def run_protomer_solvation(
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
     log_paths = scratch_context.log_paths
+    resolved_xtb_executable = xtb_executable or _default_xtb_executable(xtb_version)
 
     if protomer.mol is None:
         raise ValueError("Protomer does not have mol; cannot run workflow. Either this charge type is not suppported, or your SMILES input is invalid.")
@@ -855,7 +872,7 @@ def run_protomer_solvation(
     _log_status(
         log_paths,
         "START",
-        f"protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode}",
+        f"protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode} xtb_version={xtb_version}",
     )
     _progress(f"preparing conformer: {conformer_mode}")
 
@@ -921,7 +938,7 @@ def run_protomer_solvation(
             solvation_free_energy_kcal_mol = run_cpcmx_single_point(
                 scratch_dir=scratch_dir,
                 xyz_path=active_xyz_path,
-                xtb_executable=xtb_executable,
+                xtb_executable=resolved_xtb_executable,
                 solvent=solvent,
                 charge=charge,
                 gfn=gfn,
@@ -945,7 +962,7 @@ def run_protomer_solvation(
             gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_energy_h = run_hessian_and_parse_energies(
                 scratch_dir=scratch_dir,
                 xyz_path=active_xyz_path,
-                xtb_executable=xtb_executable,
+                xtb_executable=resolved_xtb_executable,
                 charge=charge,
                 gfn=gfn,
                 timeout_s=timeout_s,
@@ -972,10 +989,11 @@ def run_protomer_solvation(
         # calculators can be added with minimal wiring.
         def _sp_energy_from_gxtb() -> Optional[float]:
             _progress("computing gas-phase single point")
-            value_kcal_mol, _ = run_gxtb_single_point_energy(
+            run_gxtb_sp = _resolve_gxtb_single_point_runner(xtb_version)
+            value_kcal_mol, _ = run_gxtb_sp(
                 scratch_dir=scratch_dir,
                 xyz_path=active_xyz_path,
-                xtb_executable=xtb_executable,
+                xtb_executable=resolved_xtb_executable,
                 charge=charge,
                 timeout_s=timeout_s,
                 dry_run=dry_run,

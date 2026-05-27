@@ -16,6 +16,7 @@ from .xtb import (
     run_hessian_and_parse_energies,
     run_xtb_optimization,
 )
+from .xtb2 import run_gxtb_single_point_energy as run_gxtb2_single_point_energy
 
 __all__ = [
     "HARTREE_TO_KCAL_MOL",
@@ -34,6 +35,7 @@ __all__ = [
     "run_skala_single_point_energy",
     "run_cpcmx_single_point",
     "run_gxtb_single_point_energy",
+    "run_gxtb2_single_point_energy",
     "run_hessian_and_parse_energies",
     "run_xtb_optimization",
 ]

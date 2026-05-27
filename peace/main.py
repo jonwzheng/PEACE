@@ -108,6 +108,22 @@ def _build_cli_parser():
         help="Gas-phase SP source: 'gxtb', 'xtb', 'skala', or 'aimnet2'.",
     )
     p.add_argument(
+        "--xtb-version",
+        type=str,
+        default="xtb2",
+        choices=["xtb", "xtb2"],
+        help=(
+            "xTB feature version for solvation/optimization binaries: "
+            "'xtb' (legacy g-xTB driver) or 'xtb2' (with native --gxtb flag)."
+        ),
+    )
+    p.add_argument(
+        "--xtb-executable",
+        type=str,
+        default=None,
+        help="Override xTB executable name or path (default: same as --xtb-version).",
+    )
+    p.add_argument(
         "--recompute-solvation",
         action="store_true",
         help="Recompute CPCM-X solvation in post-screen stage instead of reusing screening value.",
@@ -503,6 +519,8 @@ if __name__ == "__main__":
                             external_xyz_path=args.external_xyz,
                             optimization_engine=args.optimization_engine,
                             opt_level=args.opt_level,
+                            xtb_version=args.xtb_version,
+                            xtb_executable=args.xtb_executable,
                             keep_scratch=bool(args.keep_scratch),
                             keep_logs=bool(args.keep_logs),
                             dry_run=bool(args.dry_run),
@@ -567,6 +585,8 @@ if __name__ == "__main__":
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         sp_energy=args.sp_energy,
+                        xtb_version=args.xtb_version,
+                        xtb_executable=args.xtb_executable,
                         recompute_solvation=bool(args.recompute_solvation),
                         recompute_frequencies=bool(args.recompute_frequencies),
                         reuse_screening_terms=True,
