@@ -14,8 +14,8 @@ class ChargeEngine:
         self.SMARTS_DICT = {
                 "strong_basic": 
                     {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 1]}, # TODO: exclude NH acids.
-                "weak_basic":  # TODO: =O (etc) groups? can be C=O, P=O etc.
-                    {"groups": [], "sites": []}, 
+                "weak_basic": 
+                    {"groups": ["[#6,#15,#16](=O)"], "sites": [1]}, 
                 "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+, acidic carbons/nitrogens [(CH/C-OH or NH/N-OH) connected to C#N, or to nitrate, or C=O group)]
                     {"groups": ["[#6,#15,#16](=O)[OX2H]", "[#7+;!H0]", "[#6,#7;!H0]C#N", "[#6,#7;!H0][N+](=O)[O-]", "[#6,#7;H!0][#6,#7;H0]=O", "N#[C;H1]"], "sites": [2, 0, 0, 0, 0, 1]},
                 "weak_acidic": # -OH, -NH, -SH acids TODO: C=CCC=C (aromatic or non), N#[CH], N2O-CHn. See IUPAC dataset for examples.
