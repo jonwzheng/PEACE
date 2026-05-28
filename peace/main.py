@@ -200,11 +200,12 @@ def _build_cli_parser():
         "--site-search-mode",
         type=str,
         default="default",
-        choices=["default", "all"],
+        choices=["default", "all", "none"],
         help=(
             "Ionizable-site search strategy: 'default' checks strong acid/base groups first "
             "and only weak groups if none are found; 'all' includes both strong and weak "
-            "groups (more protomer combinations)."
+            "groups (more protomer combinations); 'none' skips ionization search and keeps "
+            "only the initial tautomer protomers."
         ),
     )
     return p
@@ -282,6 +283,15 @@ def _enumerate_species_protomers(
     for taut_idx, taut in tautomer_items:
         smiles = taut.protomers[0].smiles if 0 in taut.protomers else "N/A"
         _log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)}: {smiles}")
+
+    if site_search_mode == "none":
+        _log("Skipping protomer enumeration (site-search-mode=none)")
+        for taut_idx, taut in tautomer_items:
+            _log(
+                f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers kept: "
+                f"{len(taut.protomers)}"
+            )
+        return
 
     _log("Enumerating protomeric forms for each tautomer")
     for taut_idx, taut in tautomer_items:

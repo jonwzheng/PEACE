@@ -33,8 +33,10 @@ class ChargeEngine:
         site_search_mode: str = "default",
     ) -> list[int]:
         """Given a Tautomer, returns atom indices for the query acidity/basicity."""
-        if site_search_mode not in ("default", "all"):
-            raise ValueError("site_search_mode must be 'default' or 'all'")
+        if site_search_mode not in ("default", "all", "none"):
+            raise ValueError("site_search_mode must be 'default', 'all', or 'none'")
+        if site_search_mode == "none":
+            return []
 
         if search_type == "acidic":
             strong_key, weak_key = "strong_acidic", "weak_acidic"
