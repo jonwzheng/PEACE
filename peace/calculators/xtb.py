@@ -273,6 +273,62 @@ def run_gxtb_single_point_energy(
 
     return gas_sp_energy_kcal_mol, gas_sp_energy_h
 
+def run_gxtb_optimization(
+    *,
+    scratch_dir: Path,
+    xyz_path: Path,
+    xtb_executable: str,
+    charge: int,
+    timeout_s: Optional[int],
+    dry_run: bool,
+    log_paths: list[Path],
+    run_command: Callable[..., subprocess.CompletedProcess[str]],
+    log_status: Callable[[list[Path], str, str], None],
+) -> tuple[Path, Optional[float], Optional[float]]:
+    cmd_opt = (
+        f"{shlex.quote(xtb_executable)} "
+        f"--opt "
+        f'--driver "gxtb -grad -c xtbdriver.xyz" '
+        f"{shlex.quote(xyz_path.name)} "
+        f"--chrg {shlex.quote(str(charge))}"
+    )
+    log_status(log_paths, "STEP", f"running g-xTB optimization via driver: {cmd_opt}")
+    cp_opt = run_command(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    if not dry_run:
+        gxtbopt_log_path = scratch_dir / "gxtbopt_run.log"
+        gxtbopt_log_path.write_text(cp_opt.stdout)
+        log_status(log_paths, "OK", f"saved g-xTB optimization stdout to {gxtbopt_log_path.name}")
+    if cp_opt.returncode != 0:
+        log_status(
+            log_paths,
+            "FAIL",
+            f"g-xTB optimization failed returncode={cp_opt.returncode} stdout_tail={cp_opt.stdout[-1000:]} stderr_tail={cp_opt.stderr[-1000:]}",
+        )
+        raise RuntimeError(
+            f"g-xTB optimization failed with code {cp_opt.returncode}.\n"
+            f"stdout:\n{cp_opt.stdout[-4000:]}\n"
+            f"stderr:\n{cp_opt.stderr[-4000:]}\n"
+        )
+
+    gxtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
+    if not gxtbopt_xyz_path.exists():
+        log_status(log_paths, "FAIL", "g-xTB optimization finished but xtbopt.xyz was not produced")
+        raise FileNotFoundError("Expected output xtbopt.xyz was not produced by g-xTB optimization.")
+
+    gas_sp_energy_h = parse_xtb_total_energy_hartree(cp_opt.stdout)
+    gas_sp_energy_kcal_mol = None
+    if gas_sp_energy_h is not None:
+        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
+    else:
+        warnings.warn(
+            "Could not parse TOTAL ENERGY from g-xTB optimization output. "
+            "Gas-phase energy will remain None.",
+            RuntimeWarning,
+        )
+        log_status(log_paths, "WARN", "failed to parse gas-phase energy from g-xTB optimization output")
+
+    return gxtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h
+
 
 def run_hessian_and_parse_energies(
     *,

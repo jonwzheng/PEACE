@@ -18,7 +18,9 @@ from .calculators import (
     run_orca_cosmo_rs,
     run_cpcmx_single_point,
     run_gxtb_single_point_energy,
+    run_gxtb2_optimization,
     run_gxtb2_single_point_energy,
+    run_gxtb_optimization,
     run_hessian_and_parse_energies,
     run_skala_single_point_energy,
     run_xtb_optimization,
@@ -34,6 +36,12 @@ def _resolve_gxtb_single_point_runner(xtb_version: XtbVersion):
     if xtb_version == "default":
         return run_gxtb2_single_point_energy
     return run_gxtb_single_point_energy
+
+
+def _resolve_gxtb_optimization_runner(xtb_version: XtbVersion):
+    if xtb_version == "default":
+        return run_gxtb2_optimization
+    return run_gxtb_optimization
 
 def _append_log(log_path: Path, message: str) -> None:
     timestamp = datetime.now().isoformat(timespec="seconds")
@@ -832,6 +840,7 @@ def run_protomer_solvation(
     gfn: int = 2,
     opt_level: Literal["loose", "tight", "vtight"] = "loose",
     sp_energy: Literal["gxtb", "xtb", "skala", "aimnet2"] = "gxtb",
+    gxtb_post_optimize: bool = False,
     recompute_solvation: bool = False,
     recompute_frequencies: bool = False,
     reuse_screening_terms: bool = True,
@@ -982,6 +991,34 @@ def run_protomer_solvation(
         # compute SP energy using a pluggable strategy map so additional
         # calculators can be added with minimal wiring.
         def _sp_energy_from_gxtb() -> Optional[float]:
+            if gxtb_post_optimize:
+                _progress("optimizing geometry with g-xTB")
+                run_gxtb_opt = _resolve_gxtb_optimization_runner(xtb_version)
+                gxtb_opt_xyz_path, value_kcal_mol, _ = run_gxtb_opt(
+                    scratch_dir=scratch_dir,
+                    xyz_path=active_xyz_path,
+                    input_mol=getattr(protomer, "input_mol", None),
+                    xtb_executable=xtb_executable,
+                    charge=charge,
+                    timeout_s=timeout_s,
+                    dry_run=dry_run,
+                    log_paths=log_paths,
+                    run_command=_run,
+                    log_status=_log_status,
+                )
+                _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
+                    protomer,
+                    gxtb_opt_xyz_path,
+                    log_paths,
+                )
+                if has_connectivity_mismatch:
+                    _set_mol_prop_str(protomer.mol, "workflow_status", "gxtb_postopt_connectivity_mismatch")
+                    raise RuntimeError(
+                        "g-xTB post-filter optimization changed connectivity; "
+                        "protomer excluded from direct final-energy assignment."
+                    )
+                return value_kcal_mol
+
             _progress("computing gas-phase single point")
             run_gxtb_sp = _resolve_gxtb_single_point_runner(xtb_version)
             value_kcal_mol, _ = run_gxtb_sp(

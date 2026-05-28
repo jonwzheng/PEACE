@@ -12,11 +12,15 @@ from .xtb import (
     parse_xtb_solvent_free_energy_hartree,
     parse_xtb_total_energy_hartree,
     run_cpcmx_single_point,
+    run_gxtb_optimization,
     run_gxtb_single_point_energy,
     run_hessian_and_parse_energies,
     run_xtb_optimization,
 )
-from .xtb2 import run_gxtb_single_point_energy as run_gxtb2_single_point_energy
+from .xtb2 import (
+    run_gxtb_optimization as run_gxtb2_optimization,
+    run_gxtb_single_point_energy as run_gxtb2_single_point_energy,
+)
 
 __all__ = [
     "HARTREE_TO_KCAL_MOL",
@@ -34,6 +38,8 @@ __all__ = [
     "run_aimnet2_single_point_energy",
     "run_skala_single_point_energy",
     "run_cpcmx_single_point",
+    "run_gxtb_optimization",
+    "run_gxtb2_optimization",
     "run_gxtb_single_point_energy",
     "run_gxtb2_single_point_energy",
     "run_hessian_and_parse_energies",

@@ -108,6 +108,15 @@ def _build_cli_parser():
         help="Gas-phase SP source: 'gxtb', 'xtb', 'skala', or 'aimnet2'.",
     )
     p.add_argument(
+        "--gxtb-post-optimize",
+        type=bool,
+        default=True,
+        help=(
+            "Run a g-xTB geometry optimization (--opt) in the post-screen stage."
+            "Enabled by default."
+        ),
+    )
+    p.add_argument(
         "--xtb-version",
         type=str,
         default="default",
@@ -586,6 +595,7 @@ if __name__ == "__main__":
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         sp_energy=args.sp_energy,
+                        gxtb_post_optimize=bool(args.gxtb_post_optimize),
                         xtb_version=args.xtb_version,
                         xtb_executable=args.xtb_executable,
                         recompute_solvation=bool(args.recompute_solvation),
@@ -605,6 +615,35 @@ if __name__ == "__main__":
                 min_postopt_solution_energy = min(optimized_energies) if optimized_energies else None
                 if min_postopt_solution_energy is None:
                     _log("No valid post-optimization solution energies found to backfill screened-out protomers.")
+
+                # Backfill screened-in protomers that failed downstream (e.g., g-xTB post-opt
+                # connectivity mismatch), preserving their screening-based energy delta.
+                for taut_idx, prot_idx, protomer, screening_energy, screen_delta in protomers_to_optimize:
+                    if protomer.mol is None:
+                        continue
+                    has_final_energy = protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
+                    if has_final_energy:
+                        continue
+                    if min_postopt_solution_energy is None or screen_delta is None:
+                        continue
+                    placeholder_energy = min_postopt_solution_energy + screen_delta
+                    _set_optional_double_prop(protomer, "screening_solution_phase_free_energy_kcal_mol", screening_energy)
+                    _set_optional_double_prop(protomer, "screening_delta_kcal_mol", screen_delta)
+                    _set_optional_double_prop(
+                        protomer,
+                        "screening_placeholder_solution_phase_free_energy_kcal_mol",
+                        placeholder_energy,
+                    )
+                    _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
+                    protomer.mol.SetProp("screening_placeholder_from_failed_postopt", "true")
+                    if not protomer.mol.HasProp("workflow_status"):
+                        protomer.mol.SetProp("workflow_status", "selected_but_postopt_failed")
+                    _log(
+                        "Backfilled screened-in protomer with placeholder energy "
+                        f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
+                        f"screen_delta={screen_delta} "
+                        f"placeholder_solution_energy={placeholder_energy}"
+                    )
 
                 for taut_idx, prot_idx, protomer, screening_energy, screen_delta in screened_out:
                     if protomer.mol is None:
