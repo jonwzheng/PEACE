@@ -86,6 +86,7 @@ def main() -> None:
             "--screen-threshold",
             "30.0",
         ]
+        # consider also site-search all
         cmd.extend(main_extra_args)
 
         print(f"[{idx + 1}/{len(data)}] Running: {name}")
