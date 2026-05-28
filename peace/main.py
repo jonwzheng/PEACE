@@ -155,6 +155,15 @@ def _build_cli_parser():
         help="Exclude connectivity-mismatch protomers from Boltzmann weighting and f_zwit while still reporting them.",
     )
     p.add_argument(
+        "--empirical-corrections",
+        type=bool,
+        default=True,
+        help=(
+            "Before Boltzmann weighting, lower solution-phase free energies of zwitterionic protomers."
+            "Enabled by default."
+        ),
+    )
+    p.add_argument(
         "--skip-single-protomer-solvation", # TODO: make apply for post-screening step
         action="store_true",
         help=(
@@ -373,6 +382,31 @@ def _assign_screening_placeholder(
     )
     _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
     return placeholder_energy
+
+
+def _apply_zwitterion_empirical_correction(
+    tautomer_items: list[tuple[int, Tautomer]],
+    *,
+    correction_kcal_mol: float = -3.0,
+) -> int:
+    corrected_count = 0
+    for _taut_idx, taut in tautomer_items:
+        for _prot_idx, protomer in taut.protomers.items():
+            if protomer.mol is None or not protomer.is_zwitterion:
+                continue
+            if not protomer.mol.HasProp("solution_phase_free_energy_kcal_mol"):
+                continue
+            try:
+                current_energy = float(protomer.mol.GetProp("solution_phase_free_energy_kcal_mol"))
+            except ValueError:
+                continue
+            corrected_energy = current_energy + float(correction_kcal_mol)
+            protomer.mol.SetDoubleProp("solution_phase_free_energy_uncorrected_kcal_mol", current_energy)
+            protomer.mol.SetDoubleProp("solution_phase_free_energy_kcal_mol", corrected_energy)
+            protomer.mol.SetDoubleProp("empirical_correction_kcal_mol", float(correction_kcal_mol))
+            protomer.mol.SetProp("empirical_correction_applied", "true")
+            corrected_count += 1
+    return corrected_count
 
 
 def _header_banner() -> str:
@@ -819,6 +853,16 @@ if __name__ == "__main__":
 
             if not skip_single:
                 _log(f"Optimization outputs saved under: {species_scratch}")
+
+            if args.empirical_corrections:
+                corrected_zwitterions = _apply_zwitterion_empirical_correction(
+                    tautomer_items,
+                    correction_kcal_mol=-3.0,
+                )
+                _log(
+                    "Applied zwitterion empirical correction before Boltzmann weighting: "
+                    f"count={corrected_zwitterions} delta=-3.0 kcal/mol"
+                )
 
             _log(f"Calculating Boltzmann populations for charge={charge_state}")
             excluded_unconverged_count = 0
