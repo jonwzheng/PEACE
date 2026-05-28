@@ -83,6 +83,8 @@ def main() -> None:
             "--output-csv",
             str(output_csv),
             "--no-plot",
+            "--screen-threshold",
+            "30.0",
         ]
         cmd.extend(main_extra_args)
 

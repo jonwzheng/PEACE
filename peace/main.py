@@ -857,11 +857,11 @@ if __name__ == "__main__":
             if args.empirical_corrections:
                 corrected_zwitterions = _apply_zwitterion_empirical_correction(
                     tautomer_items,
-                    correction_kcal_mol=-3.0,
+                    correction_kcal_mol=-2.8,
                 )
                 _log(
                     "Applied zwitterion empirical correction before Boltzmann weighting: "
-                    f"count={corrected_zwitterions} delta=-3.0 kcal/mol"
+                    f"count={corrected_zwitterions} delta=-2.8 kcal/mol"
                 )
 
             _log(f"Calculating Boltzmann populations for charge={charge_state}")
