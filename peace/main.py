@@ -338,6 +338,43 @@ def _set_optional_double_prop(protomer, key: str, value: Optional[float]) -> Non
     protomer.mol.SetDoubleProp(key, float(value))
 
 
+def _compute_screen_delta(
+    screening_energy: Optional[float],
+    min_screening_solution_energy: Optional[float],
+) -> Optional[float]:
+    if screening_energy is None or min_screening_solution_energy is None:
+        return None
+    return screening_energy - min_screening_solution_energy
+
+
+def _placeholder_energy(
+    baseline_energy: Optional[float],
+    delta_energy: Optional[float],
+) -> Optional[float]:
+    if baseline_energy is None or delta_energy is None:
+        return None
+    return baseline_energy + delta_energy
+
+
+def _assign_screening_placeholder(
+    protomer,
+    *,
+    screening_energy: Optional[float],
+    screen_delta: Optional[float],
+    baseline_energy: Optional[float],
+) -> Optional[float]:
+    placeholder_energy = _placeholder_energy(baseline_energy, screen_delta)
+    _set_optional_double_prop(protomer, "screening_solution_phase_free_energy_kcal_mol", screening_energy)
+    _set_optional_double_prop(protomer, "screening_delta_kcal_mol", screen_delta)
+    _set_optional_double_prop(
+        protomer,
+        "screening_placeholder_solution_phase_free_energy_kcal_mol",
+        placeholder_energy,
+    )
+    _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
+    return placeholder_energy
+
+
 def _header_banner() -> str:
     return """ RUNNING PEACE...
                          @@@%%@@@%@@@%%%@@              
@@ -553,9 +590,7 @@ if __name__ == "__main__":
                 protomers_to_optimize: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
                 screened_out: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
                 for taut_idx, prot_idx, protomer, screening_energy in screening_records:
-                    screen_delta = None
-                    if screening_energy is not None and min_screening_solution_energy is not None:
-                        screen_delta = screening_energy - min_screening_solution_energy
+                    screen_delta = _compute_screen_delta(screening_energy, min_screening_solution_energy)
                     if (
                         screen_delta is not None
                         and screen_delta > float(args.screen_threshold)
@@ -571,7 +606,7 @@ if __name__ == "__main__":
                     f"threshold={float(args.screen_threshold):.2f} kcal/mol"
                 )
 
-                _log(" *** REFINING SCREENED PROTOMERS... (gas-phase SP) ***")
+                _log(" *** REFINING SCREENED PROTOMERS... ***")
                 for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
                     protomer_items = list(spec.tautomers[taut_idx].protomers.items())
                     prefix = (
@@ -624,17 +659,14 @@ if __name__ == "__main__":
                     has_final_energy = protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
                     if has_final_energy:
                         continue
-                    if min_postopt_solution_energy is None or screen_delta is None:
-                        continue
-                    placeholder_energy = min_postopt_solution_energy + screen_delta
-                    _set_optional_double_prop(protomer, "screening_solution_phase_free_energy_kcal_mol", screening_energy)
-                    _set_optional_double_prop(protomer, "screening_delta_kcal_mol", screen_delta)
-                    _set_optional_double_prop(
+                    placeholder_energy = _assign_screening_placeholder(
                         protomer,
-                        "screening_placeholder_solution_phase_free_energy_kcal_mol",
-                        placeholder_energy,
+                        screening_energy=screening_energy,
+                        screen_delta=screen_delta,
+                        baseline_energy=min_postopt_solution_energy,
                     )
-                    _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
+                    if placeholder_energy is None:
+                        continue
                     protomer.mol.SetProp("screening_placeholder_from_failed_postopt", "true")
                     if not protomer.mol.HasProp("workflow_status"):
                         protomer.mol.SetProp("workflow_status", "selected_but_postopt_failed")
@@ -649,13 +681,12 @@ if __name__ == "__main__":
                     if protomer.mol is None:
                         continue
                     protomer.mol.SetProp("screening_skipped_postopt", "true")
-                    _set_optional_double_prop(protomer, "screening_solution_phase_free_energy_kcal_mol", screening_energy)
-                    _set_optional_double_prop(protomer, "screening_delta_kcal_mol", screen_delta)
-                    placeholder_energy = None
-                    if min_postopt_solution_energy is not None and screen_delta is not None:
-                        placeholder_energy = min_postopt_solution_energy + screen_delta
-                    _set_optional_double_prop(protomer, "screening_placeholder_solution_phase_free_energy_kcal_mol", placeholder_energy)
-                    _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
+                    placeholder_energy = _assign_screening_placeholder(
+                        protomer,
+                        screening_energy=screening_energy,
+                        screen_delta=screen_delta,
+                        baseline_energy=min_postopt_solution_energy,
+                    )
                     protomer.mol.SetProp("workflow_status", "screened_out")
                     _log(
                         "Screened out protomer "
@@ -777,7 +808,7 @@ if __name__ == "__main__":
                         for taut_idx, prot_idx, protomer, _screening_energy, screen_delta in screened_out:
                             if protomer.mol is None or screen_delta is None:
                                 continue
-                            placeholder_energy = min_refined_final + screen_delta
+                            placeholder_energy = _placeholder_energy(min_refined_final, screen_delta)
                             _set_optional_double_prop(
                                 protomer,
                                 "screening_placeholder_solution_phase_free_energy_kcal_mol",
