@@ -922,6 +922,10 @@ def run_protomer_solvation(
 
         # reuse the energies from the previous screening step if applicable
         if reuse_screening_terms:
+            gas_sp_energy_kcal_mol = (
+                protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
+                if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol") else gas_sp_energy_kcal_mol
+            )
             solvation_free_energy_kcal_mol = (
                 protomer.mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")
                 if protomer.mol.HasProp("screening_solvation_free_energy_kcal_mol") else solvation_free_energy_kcal_mol
@@ -929,50 +933,6 @@ def run_protomer_solvation(
             rrho_contribution_kcal_mol = (
                 protomer.mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")
                 if protomer.mol.HasProp("screening_rrho_contribution_kcal_mol") else rrho_contribution_kcal_mol
-            )
-            gas_sp_energy_kcal_mol = (
-                protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
-                if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol") else gas_sp_energy_kcal_mol
-            )
-       
-        # compute DGsolv only when requested or unavailable from screening.
-        if recompute_solvation or solvation_free_energy_kcal_mol is None:
-            _progress("computing solvation single point")
-            solvation_free_energy_kcal_mol = run_cpcmx_single_point(
-                scratch_dir=scratch_dir,
-                xyz_path=active_xyz_path,
-                xtb_executable=xtb_executable,
-                solvent=solvent,
-                charge=charge,
-                gfn=gfn,
-                timeout_s=timeout_s,
-                dry_run=dry_run,
-                log_paths=log_paths,
-                run_command=_run,
-                log_status=_log_status,
-            )
-        else:
-            _log_status(
-                log_paths,
-                "OK",
-                f"reusing screening solvation energy (kcal/mol)={solvation_free_energy_kcal_mol}",
-            )
-            _progress("reusing screening solvation single point")
-
-        # compute RRHO term
-        if recompute_frequencies or rrho_contribution_kcal_mol is None:
-            _progress("computing RRHO contribution w/ frequency (xTB)")
-            gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_energy_h = run_hessian_and_parse_energies(
-                scratch_dir=scratch_dir,
-                xyz_path=active_xyz_path,
-                xtb_executable=xtb_executable,
-                charge=charge,
-                gfn=gfn,
-                timeout_s=timeout_s,
-                dry_run=dry_run,
-                log_paths=log_paths,
-                run_command=_run,
-                log_status=_log_status,
             )
 
         # If screening optimization and requested SP use the same engine,
@@ -1074,6 +1034,46 @@ def run_protomer_solvation(
                 gas_sp_energy_kcal_mol = sp_energy_strategies[sp_energy]()
             except KeyError as exc:
                 raise ValueError(f"Unknown sp_energy mode: {sp_energy}") from exc
+
+        # compute DGsolv only when requested or unavailable from screening.
+        if recompute_solvation or solvation_free_energy_kcal_mol is None:
+            _progress("computing solvation single point")
+            solvation_free_energy_kcal_mol = run_cpcmx_single_point(
+                scratch_dir=scratch_dir,
+                xyz_path=active_xyz_path,
+                xtb_executable=xtb_executable,
+                solvent=solvent,
+                charge=charge,
+                gfn=gfn,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
+            )
+        else:
+            _log_status(
+                log_paths,
+                "OK",
+                f"reusing screening solvation energy (kcal/mol)={solvation_free_energy_kcal_mol}",
+            )
+            _progress("reusing screening solvation single point")
+
+        # compute RRHO term if requested
+        if recompute_frequencies or rrho_contribution_kcal_mol is None:
+            _progress("computing RRHO contribution w/ frequency (xTB)")
+            gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_energy_h = run_hessian_and_parse_energies(
+                scratch_dir=scratch_dir,
+                xyz_path=active_xyz_path,
+                xtb_executable=xtb_executable,
+                charge=charge,
+                gfn=gfn,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
+            )
 
         # compute solution-phase free energy by adding everything together
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(

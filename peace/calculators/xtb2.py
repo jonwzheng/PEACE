@@ -71,7 +71,7 @@ def run_gxtb_optimization(
 
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(xyz_path.name)} "
-        f"--gxtb{input_flag} --opt --chrg {shlex.quote(str(charge))}"
+        f"--gxtb{input_flag} --opt --grad --chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running g-xTB optimization: {cmd_opt}")
     cp_opt = run_command(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
