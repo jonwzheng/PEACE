@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Load benchmark results
-df = pd.read_csv('results/f_zwit_benchmark/benchmark_results.csv')
+df = pd.read_csv('results/f_zwit_benchmark_with_empir_cxns/benchmark_results.csv')
 
 # Prepare plot
 fig, ax = plt.subplots(figsize=(13,6))
@@ -18,7 +18,7 @@ scatter = ax.scatter(
 )
 
 # filter out COSMO-RS calcs
-df = df[df['type'] != 'COSMO-RS']
+df = df[df['dtype'] != 'COSMO-RS']
 
 # Labeling
 XMIN : float = -0.1
