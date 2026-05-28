@@ -25,27 +25,50 @@ class ChargeEngine:
         for acidity_type, values in self.SMARTS_DICT.items():
             self.SMARTS_DICT[acidity_type]["cached_mols"] = [AllChem.MolFromSmarts(x) for x in values['groups']]
 
-    def search_ionization_centers(self, taut: Tautomer, search_type: str) -> list[int]:
-        """ Given a Tautomer, returns a list of atom indices corresponding to the query acidity/basicity"""
+    def search_ionization_centers(
+        self,
+        taut: Tautomer,
+        search_type: str,
+        *,
+        site_search_mode: str = "default",
+    ) -> list[int]:
+        """Given a Tautomer, returns atom indices for the query acidity/basicity."""
+        if site_search_mode not in ("default", "all"):
+            raise ValueError("site_search_mode must be 'default' or 'all'")
+
         if search_type == "acidic":
-            smarts_collection = self.SMARTS_DICT["strong_acidic"]
-            collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
-            if len(collection) == 0:
-                smarts_collection = self.SMARTS_DICT["weak_acidic"]
-                collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
-            return collection
+            strong_key, weak_key = "strong_acidic", "weak_acidic"
         elif search_type == "basic":
-            smarts_collection = self.SMARTS_DICT["strong_basic"]
-            collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
-            if len(collection) == 0:
-                smarts_collection = self.SMARTS_DICT["weak_basic"]
-                collection = taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
-            return collection
-        elif search_type not in self.SMARTS_DICT.keys():
-            raise ValueError(f"Search type must be in: {self.SMARTS_DICT.keys()}, or 'acidic' or 'basic'")
-        
-        smarts_collection = self.SMARTS_DICT[search_type]
-        return taut.find_ionization_sites(smarts_collection["cached_mols"], smarts_collection["sites"])
+            strong_key, weak_key = "strong_basic", "weak_basic"
+        elif search_type not in self.SMARTS_DICT:
+            raise ValueError(
+                f"Search type must be in: {self.SMARTS_DICT.keys()}, or 'acidic' or 'basic'"
+            )
+        else:
+            smarts_collection = self.SMARTS_DICT[search_type]
+            return taut.find_ionization_sites(
+                smarts_collection["cached_mols"], smarts_collection["sites"]
+            )
+
+        strong_collection = self.SMARTS_DICT[strong_key]
+        strong_sites = taut.find_ionization_sites(
+            strong_collection["cached_mols"], strong_collection["sites"]
+        )
+
+        if site_search_mode == "default":
+            if strong_sites:
+                return strong_sites
+            weak_collection = self.SMARTS_DICT[weak_key]
+            return taut.find_ionization_sites(
+                weak_collection["cached_mols"], weak_collection["sites"]
+            )
+
+        elif site_search_mode == "all":
+            weak_collection = self.SMARTS_DICT[weak_key]
+            weak_sites = taut.find_ionization_sites(
+                weak_collection["cached_mols"], weak_collection["sites"]
+            )
+            return list(dict.fromkeys(strong_sites + weak_sites))
 
     def search_for_tautomers(self, spec: Species) -> list[str]:
         """

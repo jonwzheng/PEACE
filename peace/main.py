@@ -196,6 +196,17 @@ def _build_cli_parser():
         default="orca",
         help="ORCA executable for the optional --refine COSMO-RS step.",
     )
+    p.add_argument(
+        "--site-search-mode",
+        type=str,
+        default="default",
+        choices=["default", "all"],
+        help=(
+            "Ionizable-site search strategy: 'default' checks strong acid/base groups first "
+            "and only weak groups if none are found; 'all' includes both strong and weak "
+            "groups (more protomer combinations)."
+        ),
+    )
     return p
 
 
@@ -231,6 +242,7 @@ def _collect_charge_shifts_from_protomer(
     *,
     engine: ChargeEngine,
     charge_step: int,
+    site_search_mode: str,
 ) -> list[str]:
     """Return canonical SMILES for all distinct one-step charge shifts at any matching site."""
     if protomer.mol is None:
@@ -238,7 +250,9 @@ def _collect_charge_shifts_from_protomer(
 
     search_type = "acidic" if charge_step < 0 else "basic"
     trial_taut = Tautomer.from_mol(copy.deepcopy(protomer.mol))
-    sites = engine.search_ionization_centers(trial_taut, search_type)
+    sites = engine.search_ionization_centers(
+        trial_taut, search_type, site_search_mode=site_search_mode
+    )
     if not sites:
         return []
 
@@ -260,7 +274,9 @@ def _collect_charge_shifts_from_protomer(
     return list(dict.fromkeys(shifted_smiles))
 
 
-def _enumerate_species_protomers(spec: Species, *, engine: ChargeEngine) -> None:
+def _enumerate_species_protomers(
+    spec: Species, *, engine: ChargeEngine, site_search_mode: str
+) -> None:
     tautomer_items = list(spec.tautomers.items())
     _log(f"Tautomer enumeration complete: {len(tautomer_items)} tautomer(s) found")
     for taut_idx, taut in tautomer_items:
@@ -285,8 +301,12 @@ def _enumerate_species_protomers(spec: Species, *, engine: ChargeEngine) -> None
             processed_seed_smiles.add(seed_smiles)
 
             seed_taut = Tautomer.from_mol(copy.deepcopy(seed_protomer.mol))
-            acid_sites = engine.search_ionization_centers(seed_taut, "acidic")
-            basic_sites = engine.search_ionization_centers(seed_taut, "basic")
+            acid_sites = engine.search_ionization_centers(
+                seed_taut, "acidic", site_search_mode=site_search_mode
+            )
+            basic_sites = engine.search_ionization_centers(
+                seed_taut, "basic", site_search_mode=site_search_mode
+            )
             _log(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} round {round_idx} seed={seed_smiles} "
                 f"ionization sites -> acidic={acid_sites if acid_sites else '[]'}, "
@@ -311,6 +331,7 @@ def _seed_adjacent_charge_species(
     *,
     engine: ChargeEngine,
     charge_step: int,
+    site_search_mode: str,
 ) -> Optional[Species]:
     if charge_step not in (-1, 1):
         raise ValueError("charge_step must be -1 or +1")
@@ -319,7 +340,12 @@ def _seed_adjacent_charge_species(
     shifted_smiles: list[str] = []
     for protomer in source_taut.protomers.values():
         shifted_smiles.extend(
-            _collect_charge_shifts_from_protomer(protomer, engine=engine, charge_step=charge_step)
+            _collect_charge_shifts_from_protomer(
+                protomer,
+                engine=engine,
+                charge_step=charge_step,
+                site_search_mode=site_search_mode,
+            )
         )
 
     if not shifted_smiles:
@@ -481,13 +507,16 @@ if __name__ == "__main__":
     _log(f"Run started at: {run_started_at}")
     _log(f"Input SMILES: {args.smiles}")
     _log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
+    _log(f"Site search mode: {args.site_search_mode}")
 
     engine = ChargeEngine()
     seed_spec = _make_species(args.smiles, engine=engine)
     seed_charge = AllChem.GetFormalCharge(seed_spec.tautomers[0].protomers[0].mol)
     _log(f"Input SMILES seed formal charge: {seed_charge}")
     _log(f"Generating seed Species at charge {seed_charge}")
-    _enumerate_species_protomers(seed_spec, engine=engine)
+    _enumerate_species_protomers(
+        seed_spec, engine=engine, site_search_mode=args.site_search_mode
+    )
 
     ############################
     # Charge seeding
@@ -501,14 +530,21 @@ if __name__ == "__main__":
     while current_charge - 1 >= charge_min:
         target_charge = current_charge - 1
         _log(f"Attempting to seed charge state {target_charge} from {current_charge}")
-        next_spec = _seed_adjacent_charge_species(current_spec, engine=engine, charge_step=-1)
+        next_spec = _seed_adjacent_charge_species(
+            current_spec,
+            engine=engine,
+            charge_step=-1,
+            site_search_mode=args.site_search_mode,
+        )
         if next_spec is None:
             _log(
                 f"No matching deprotonation found while searching charge {target_charge}; "
                 "stopping lower-charge branch."
             )
             break
-        _enumerate_species_protomers(next_spec, engine=engine)
+        _enumerate_species_protomers(
+            next_spec, engine=engine, site_search_mode=args.site_search_mode
+        )
         species_by_charge[target_charge] = next_spec
         current_spec = next_spec
         current_charge = target_charge
@@ -519,14 +555,21 @@ if __name__ == "__main__":
     while current_charge + 1 <= charge_max:
         target_charge = current_charge + 1
         _log(f"Attempting to seed charge state {target_charge} from {current_charge}")
-        next_spec = _seed_adjacent_charge_species(current_spec, engine=engine, charge_step=1)
+        next_spec = _seed_adjacent_charge_species(
+            current_spec,
+            engine=engine,
+            charge_step=1,
+            site_search_mode=args.site_search_mode,
+        )
         if next_spec is None:
             _log(
                 f"No matching protonation found while searching charge {target_charge}; "
                 "stopping higher-charge branch."
             )
             break
-        _enumerate_species_protomers(next_spec, engine=engine)
+        _enumerate_species_protomers(
+            next_spec, engine=engine, site_search_mode=args.site_search_mode
+        )
         species_by_charge[target_charge] = next_spec
         current_spec = next_spec
         current_charge = target_charge
