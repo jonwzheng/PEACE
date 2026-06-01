@@ -25,15 +25,15 @@
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="mm"
-     inkscape:zoom="1.715186"
-     inkscape:cx="157.12581"
-     inkscape:cy="92.409802"
+     inkscape:zoom="2.1448275"
+     inkscape:cx="514.02735"
+     inkscape:cy="196.5193"
      inkscape:window-width="3362"
      inkscape:window-height="1363"
      inkscape:window-x="78"
      inkscape:window-y="40"
      inkscape:window-maximized="1"
-     inkscape:current-layer="svg11"
+     inkscape:current-layer="g1"
      showgrid="false" />
   <title
      id="title1">Qt SVG Document</title>
@@ -45,11 +45,11 @@
        inkscape:collect="always"
        id="linearGradient4884">
       <stop
-         style="stop-color:#ff7c93;stop-opacity:1;"
+         style="stop-color:#ff4a4a;stop-opacity:1;"
          offset="0"
          id="stop4880" />
       <stop
-         style="stop-color:#85aeef;stop-opacity:1;"
+         style="stop-color:#6699ec;stop-opacity:1;"
          offset="1"
          id="stop4882" />
     </linearGradient>
@@ -71,10 +71,10 @@
        inkscape:collect="always"
        xlink:href="#linearGradient4884"
        id="linearGradient4888"
-       x1="1030.608"
-       y1="486.95828"
-       x2="1070.9417"
-       y2="486.95828"
+       x1="1022.821"
+       y1="495.96707"
+       x2="1060.1694"
+       y2="486.3165"
        gradientUnits="userSpaceOnUse"
        gradientTransform="matrix(1.4648826,-0.01683307,-0.01741196,1.4846512,-466.35251,-224.6111)" />
   </defs>
