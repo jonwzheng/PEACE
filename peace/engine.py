@@ -33,8 +33,10 @@ class ChargeEngine:
         site_search_mode: str = "default",
     ) -> list[int]:
         """Given a Tautomer, returns atom indices for the query acidity/basicity."""
-        if site_search_mode not in ("default", "all", "none"):
-            raise ValueError("site_search_mode must be 'default', 'all', or 'none'")
+        if site_search_mode not in ("default", "strong", "all", "none"):
+            raise ValueError(
+                "site_search_mode must be 'default', 'strong', 'all', or 'none'"
+            )
         if site_search_mode == "none":
             return []
 
@@ -57,6 +59,9 @@ class ChargeEngine:
             strong_collection["cached_mols"], strong_collection["sites"]
         )
 
+        if site_search_mode == "strong":
+            return strong_sites
+
         if site_search_mode == "default":
             if strong_sites:
                 return strong_sites
@@ -65,7 +70,7 @@ class ChargeEngine:
                 weak_collection["cached_mols"], weak_collection["sites"]
             )
 
-        elif site_search_mode == "all":
+        if site_search_mode == "all":
             weak_collection = self.SMARTS_DICT[weak_key]
             weak_sites = taut.find_ionization_sites(
                 weak_collection["cached_mols"], weak_collection["sites"]

@@ -200,11 +200,12 @@ def _build_cli_parser():
         "--site-search-mode",
         type=str,
         default="default",
-        choices=["default", "all", "none"],
+        choices=["default", "strong", "all", "none"],
         help=(
             "Ionizable-site search strategy: 'default' checks strong acid/base groups first "
-            "and only weak groups if none are found; 'all' includes both strong and weak "
-            "groups (more protomer combinations); 'none' skips ionization search and keeps "
+            "and only weak groups if none are found; 'strong' uses only strong groups "
+            "(no weak fallback); 'all' includes both strong and weak groups "
+            "(more protomer combinations); 'none' skips ionization search and keeps "
             "only the initial tautomer protomers."
         ),
     )
