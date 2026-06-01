@@ -1,4 +1,4 @@
-from .protomer import Protomer, Tautomer, Species
+from .protomer import Tautomer, Species
 from rdkit.Chem import AllChem, Atom, ValenceType
 from rdkit.Chem.MolStandardize.rdMolStandardize import TautomerEnumerator
 
@@ -15,35 +15,15 @@ class ChargeEngine:
                 "strong_basic": 
                     {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 1]}, # TODO: exclude NH acids.
                 "weak_basic": 
-                    {"groups": ["[#6,#15,#16](=O)"], "sites": [1]}, 
+                    {"groups": ["[#6,#15,#16](=[O+0])"], "sites": [1]}, 
                 "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+, acidic carbons/nitrogens [(CH/C-OH or NH/N-OH) connected to C#N, or to nitrate, or C=O group)]
-                    {"groups": ["[#6,#15,#16](=O)[OX2H]", "[#7+;!H0]", "[#6,#7;!H0]C#N", "[#6,#7;!H0][N+](=O)[O-]", "[#6,#7;H!0][#6,#7;H0]=O", "N#[C;H1]"], "sites": [2, 0, 0, 0, 0, 1]},
+                    {"groups": ["[#6,#15,#16](=O)[OX2H+0]", "[#7+;!H0+0]", "[#6,#7;!H0+0]C#N", "[#6,#7;!H0+0][N+](=O)[O-]", "[#6,#7;H!0+0][#6,#7;H0]=O", "N#[C;H1+0]"], "sites": [2, 0, 0, 0, 0, 1]},
                 "weak_acidic": # -OH, -NH, -SH acids TODO: C=CCC=C (aromatic or non), N#[CH], N2O-CHn. See IUPAC dataset for examples.
-                    {"groups": ["[#7,#8,#16;!H0]"], "sites": [0]} 
+                    {"groups": ["[#7,#8,#16;!H0+0]"], "sites": [0]} 
                 }
         
         for acidity_type, values in self.SMARTS_DICT.items():
             self.SMARTS_DICT[acidity_type]["cached_mols"] = [AllChem.MolFromSmarts(x) for x in values['groups']]
-
-    @staticmethod
-    def weak_site_fallback_allowed(taut: Tautomer, site_search_mode: str) -> bool:
-        """
-        Whether default-mode site search may fall back from strong to weak groups.
-
-        For zwitterionic or multiply-charged protomers, only strong groups are used
-        so already-ionized sites do not trigger weak-base
-        matches such as carbonyl oxygen.
-        """
-        if site_search_mode != "default":
-            return False
-        mol = taut.protomers[0].mol if taut.protomers else None
-        if mol is None:
-            return True
-        if AllChem.GetFormalCharge(mol) != 0:
-            return False
-        if Protomer._is_zwitterion_mol(mol):
-            return False
-        return True
 
     def search_ionization_centers(
         self,
@@ -78,7 +58,7 @@ class ChargeEngine:
         )
 
         if site_search_mode == "default":
-            if strong_sites or not self.weak_site_fallback_allowed(taut, site_search_mode):
+            if strong_sites:
                 return strong_sites
             weak_collection = self.SMARTS_DICT[weak_key]
             return taut.find_ionization_sites(
