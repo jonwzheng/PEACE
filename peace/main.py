@@ -351,6 +351,16 @@ def _enumerate_species_protomers(
             )
         return
 
+    # TODO: consider refactoring this
+    if max_seed_rounds == 0:
+        _log("Skipping protomer expansion (max-seed-rounds=0); keeping base protomer(s) only")
+        for taut_idx, taut in tautomer_items:
+            _log(
+                f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers kept: "
+                f"{len(taut.protomers)}"
+            )
+        return
+
     _log("Enumerating protomeric forms for each tautomer")
     for taut_idx, taut in tautomer_items:
         # Iterative protomer expansion:
