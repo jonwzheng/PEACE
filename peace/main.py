@@ -225,7 +225,7 @@ def _build_cli_parser():
         default=5,
         help=(
             "Multiplier for the automatic seed-round cap when --max-seed-rounds is unset "
-            "(default: 8)."
+            "(default: 5)."
         ),
     )
     return p
