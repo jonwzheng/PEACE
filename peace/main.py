@@ -209,6 +209,25 @@ def _build_cli_parser():
             "only the initial tautomer protomers."
         ),
     )
+    p.add_argument(
+        "--max-seed-rounds",
+        type=int,
+        default=None,
+        help=(
+            "Cap iterative protomer seed rounds per tautomer. "
+            "Default: --seed-round-cap-factor * ionizable groups on the reference protomer. "
+            "Set to -1 for no cap."
+        ),
+    )
+    p.add_argument(
+        "--seed-round-cap-factor",
+        type=int,
+        default=5,
+        help=(
+            "Multiplier for the automatic seed-round cap when --max-seed-rounds is unset "
+            "(default: 5)."
+        ),
+    )
     return p
 
 
@@ -276,8 +295,46 @@ def _collect_charge_shifts_from_protomer(
     return list(dict.fromkeys(shifted_smiles))
 
 
+def _count_ionizable_groups(
+    protomer: Protomer,
+    *,
+    engine: ChargeEngine,
+    site_search_mode: str,
+) -> int:
+    """Count unique atom indices flagged as acidic and/or basic on a protomer."""
+    trial_taut = Tautomer.from_mol(copy.deepcopy(protomer.mol))
+    acid_sites = engine.search_ionization_centers(
+        trial_taut, "acidic", site_search_mode=site_search_mode
+    )
+    basic_sites = engine.search_ionization_centers(
+        trial_taut, "basic", site_search_mode=site_search_mode
+    )
+    return len(set(acid_sites) | set(basic_sites))
+
+
+def _resolve_max_seed_rounds(
+    n_ionizable_groups: int,
+    *,
+    max_seed_rounds: int | None,
+    seed_round_cap_factor: int,
+) -> int | None:
+    """Return the seed-round cap, or None when unlimited."""
+    if max_seed_rounds is not None and max_seed_rounds < 0:
+        return None
+    if max_seed_rounds is not None:
+        return max(0, max_seed_rounds)
+    if n_ionizable_groups == 0:
+        return 1
+    return max(1, round(seed_round_cap_factor * n_ionizable_groups))
+
+
 def _enumerate_species_protomers(
-    spec: Species, *, engine: ChargeEngine, site_search_mode: str
+    spec: Species,
+    *,
+    engine: ChargeEngine,
+    site_search_mode: str,
+    max_seed_rounds: int | None = None,
+    seed_round_cap_factor: int = 5,
 ) -> None:
     tautomer_items = list(spec.tautomers.items())
     _log(f"Tautomer enumeration complete: {len(tautomer_items)} tautomer(s) found")
@@ -299,11 +356,35 @@ def _enumerate_species_protomers(
         # Iterative protomer expansion:
         # each newly discovered protomer becomes a seed to discover additional
         # protonation/deprotonation combinations (supports multi-zwitterions).
+        reference_protomer = taut.protomers[0]
+        n_ionizable_groups = _count_ionizable_groups(
+            reference_protomer,
+            engine=engine,
+            site_search_mode=site_search_mode,
+        )
+        round_cap = _resolve_max_seed_rounds(
+            n_ionizable_groups,
+            max_seed_rounds=max_seed_rounds,
+            seed_round_cap_factor=seed_round_cap_factor,
+        )
+        if round_cap is not None:
+            _log(
+                f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} seed round cap: {round_cap} "
+                f"({n_ionizable_groups} ionizable group(s) on reference protomer)"
+            )
+
         seed_queue = list(taut.protomers.values())
         processed_seed_smiles = set()
         round_idx = 0
 
         while seed_queue:
+            if round_cap is not None and round_idx >= round_cap:
+                _log(
+                    f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} stopping protomer expansion: "
+                    f"seed round cap reached ({round_cap} rounds, "
+                    f"{len(seed_queue)} seed(s) remaining in queue)"
+                )
+                break
             round_idx += 1
             seed_protomer = seed_queue.pop(0)
             seed_smiles = seed_protomer.smiles
@@ -519,6 +600,15 @@ if __name__ == "__main__":
     _log(f"Input SMILES: {args.smiles}")
     _log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
     _log(f"Site search mode: {args.site_search_mode}")
+    if args.max_seed_rounds is not None and args.max_seed_rounds < 0:
+        _log("Seed round cap: disabled")
+    elif args.max_seed_rounds is not None:
+        _log(f"Seed round cap: {args.max_seed_rounds} rounds per tautomer")
+    else:
+        _log(
+            "Seed round cap: "
+            f"{args.seed_round_cap_factor:g} × ionizable groups per tautomer"
+        )
 
     engine = ChargeEngine()
     seed_spec = _make_species(args.smiles, engine=engine)
@@ -526,7 +616,11 @@ if __name__ == "__main__":
     _log(f"Input SMILES seed formal charge: {seed_charge}")
     _log(f"Generating seed Species at charge {seed_charge}")
     _enumerate_species_protomers(
-        seed_spec, engine=engine, site_search_mode=args.site_search_mode
+        seed_spec,
+        engine=engine,
+        site_search_mode=args.site_search_mode,
+        max_seed_rounds=args.max_seed_rounds,
+        seed_round_cap_factor=args.seed_round_cap_factor,
     )
 
     ############################
@@ -554,7 +648,11 @@ if __name__ == "__main__":
             )
             break
         _enumerate_species_protomers(
-            next_spec, engine=engine, site_search_mode=args.site_search_mode
+            next_spec,
+            engine=engine,
+            site_search_mode=args.site_search_mode,
+            max_seed_rounds=args.max_seed_rounds,
+            seed_round_cap_factor=args.seed_round_cap_factor,
         )
         species_by_charge[target_charge] = next_spec
         current_spec = next_spec
@@ -579,7 +677,11 @@ if __name__ == "__main__":
             )
             break
         _enumerate_species_protomers(
-            next_spec, engine=engine, site_search_mode=args.site_search_mode
+            next_spec,
+            engine=engine,
+            site_search_mode=args.site_search_mode,
+            max_seed_rounds=args.max_seed_rounds,
+            seed_round_cap_factor=args.seed_round_cap_factor,
         )
         species_by_charge[target_charge] = next_spec
         current_spec = next_spec
