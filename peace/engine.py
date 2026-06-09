@@ -13,7 +13,7 @@ class ChargeEngine:
         self.tautomer_enumerator = TautomerEnumerator()
         self.SMARTS_DICT = {
                 "strong_basic": 
-                    {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 1]}, # TODO: exclude NH acids.
+                    {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 0]}, # TODO: exclude NH acids.
                 "weak_basic": 
                     {"groups": ["[#6,#15,#16](=[O+0])"], "sites": [1]}, 
                 "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+, acidic carbons/nitrogens [(CH/C-OH or NH/N-OH) connected to C#N, or to nitrate, or C=O group)]
