@@ -16,10 +16,10 @@ class ChargeEngine:
                     {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 0]}, # TODO: exclude NH acids.
                 "weak_basic": 
                     {"groups": ["[#6,#15,#16](=[O+0])[!OX2H+0]"], "sites": [1]}, 
-                "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+, acidic carbons/nitrogens [(CH/C-OH or NH/N-OH) connected to C#N, or to nitrate, or C=O group)]
-                    {"groups": ["[#6,#15,#16](=[O,S,P])[O,S,P;X2H+0]", "[#7+;!H0+0]", "[#6,#7;!H0+0]C#N", "[#6,#7;!H0+0][N+](=O)[O-]", "[#6,#7;H!0+0][#6,#7;H0]=O", "N#[C;H1+0]"], "sites": [2, 0, 0, 0, 0, 1]},
-                "weak_acidic": # -OH, -NH, -SH acids; alpha-carbon of carbox. acid (CC=O) note, very weakly acidic TODO: C=CCC=C (aromatic or non), N#[CH], N2O-CHn. See IUPAC dataset for examples.
-                    {"groups": ["[#7,#8,#16;!H0+0]", "[#6;!H0+0][#6](=[O+0])[!O,!S,!P]"], "sites": [0, 0]} 
+                "strong_acidic": # Acid-type groups (e.g., -ate acids, NH+, acidic carbons/nitrogens [(CH/C-OH or NH/N-OH) connected to C#N, or to nitrate, or C=O group)]; strong oddball acids like SeH
+                    {"groups": ["[#6,#15,#16,As](=[O,S,P])[O,S,P;X2H+0]", "[#7+;!H0+0]", "[Se,Cl,F,Br,I;!H0]"], "sites": [2, 0, 0, 0]},
+                "weak_acidic": # -OH, -NH, -SH acids; nitrile group and special case; electron withdrawing CH e.g. CH-nitro group, CC=O alpha-carbon of carbox. group without matching carboxylic acid (CC=O) note, very weakly acidic; 
+                    {"groups": ["[#7,#8,#16;!H0+0]", "[#6,#7;!H0+0]C#N", "N#[C;H1+0]", "[#6,#7;!H0+0][N+](=O)[O-]", "[#6,#7;H!0+0][#6,#7;H0]=O", "[#6;!H0+0][#6](=[O+0])[!O,!S,!P]",], "sites": [0, 0, 1, 0, 0, 0]} 
                 }
         
         for acidity_type, values in self.SMARTS_DICT.items():
