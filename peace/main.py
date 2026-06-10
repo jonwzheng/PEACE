@@ -438,24 +438,27 @@ def _seed_adjacent_charge_species(
     if charge_step not in (-1, 1):
         raise ValueError("charge_step must be -1 or +1")
 
-    source_taut = source_spec.tautomers[0]
     shifted_smiles: list[str] = []
-    for protomer in source_taut.protomers.values():
-        shifted_smiles.extend(
-            _collect_charge_shifts_from_protomer(
-                protomer,
-                engine=engine,
-                charge_step=charge_step,
-                site_search_mode=site_search_mode,
+    source_protomer_count = 0
+    for taut in source_spec.tautomers.values():
+        source_protomer_count += len(taut.protomers)
+        for protomer in taut.protomers.values():
+            shifted_smiles.extend(
+                _collect_charge_shifts_from_protomer(
+                    protomer,
+                    engine=engine,
+                    charge_step=charge_step,
+                    site_search_mode=site_search_mode,
+                )
             )
-        )
 
     if not shifted_smiles:
         return None
 
     unique_count = len(dict.fromkeys(shifted_smiles))
     _log(
-        f"  Charge-shift pool from tautomer 0: {len(source_taut.protomers)} source protomer(s) "
+        f"  Charge-shift pool from {len(source_spec.tautomers)} tautomer(s): "
+        f"{source_protomer_count} source protomer(s) "
         f"-> {len(shifted_smiles)} shift(s), {unique_count} unique"
     )
     return _make_species_from_protomer_pool(shifted_smiles, engine=engine)
