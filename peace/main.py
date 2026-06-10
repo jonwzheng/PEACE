@@ -228,6 +228,14 @@ def _build_cli_parser():
             "(default: 5)."
         ),
     )
+    p.add_argument(
+        "--charge-seed-first-only",
+        action="store_true",
+        help=(
+            "When seeding adjacent charge states, use only the first unique "
+            "protonation/deprotonation product instead of merging the full shift pool."
+        ),
+    )
     return p
 
 
@@ -243,6 +251,7 @@ def _make_species_from_protomer_pool(
     seed_smiles_list: list[str],
     *,
     engine: ChargeEngine,
+    charge_seed_first_only: bool = False,
 ) -> Species:
     """Build a species from multiple protomer seeds, deduplicated, in tautomer 0."""
     unique_smiles = list(
@@ -250,6 +259,9 @@ def _make_species_from_protomer_pool(
     )
     if not unique_smiles:
         raise ValueError("Protomer pool is empty after canonicalization.")
+
+    if charge_seed_first_only:
+        return _make_species(unique_smiles[0], engine=engine)
 
     spec = _make_species(unique_smiles[0], engine=engine)
     base_taut = spec.tautomers[0]
@@ -434,6 +446,7 @@ def _seed_adjacent_charge_species(
     engine: ChargeEngine,
     charge_step: int,
     site_search_mode: str,
+    charge_seed_first_only: bool = False,
 ) -> Optional[Species]:
     if charge_step not in (-1, 1):
         raise ValueError("charge_step must be -1 or +1")
@@ -461,7 +474,16 @@ def _seed_adjacent_charge_species(
         f"{source_protomer_count} source protomer(s) "
         f"-> {len(shifted_smiles)} shift(s), {unique_count} unique"
     )
-    return _make_species_from_protomer_pool(shifted_smiles, engine=engine)
+    if charge_seed_first_only and unique_count > 1:
+        _log(
+            f"  Using first charge shift only (--charge-seed-first-only); "
+            f"discarded {unique_count - 1} alternative(s)"
+        )
+    return _make_species_from_protomer_pool(
+        shifted_smiles,
+        engine=engine,
+        charge_seed_first_only=charge_seed_first_only,
+    )
 
 
 def _ts() -> str:
@@ -613,6 +635,8 @@ if __name__ == "__main__":
     _log(f"Input SMILES: {args.smiles}")
     _log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
     _log(f"Site search mode: {args.site_search_mode}")
+    if args.charge_seed_first_only:
+        _log("Charge seeding: first shift only (--charge-seed-first-only)")
     if args.max_seed_rounds is not None and args.max_seed_rounds < 0:
         _log("Seed round cap: disabled")
     elif args.max_seed_rounds is not None:
@@ -653,6 +677,7 @@ if __name__ == "__main__":
             engine=engine,
             charge_step=-1,
             site_search_mode=args.site_search_mode,
+            charge_seed_first_only=args.charge_seed_first_only,
         )
         if next_spec is None:
             _log(
@@ -682,6 +707,7 @@ if __name__ == "__main__":
             engine=engine,
             charge_step=1,
             site_search_mode=args.site_search_mode,
+            charge_seed_first_only=args.charge_seed_first_only,
         )
         if next_spec is None:
             _log(
