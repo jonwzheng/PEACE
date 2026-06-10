@@ -77,11 +77,11 @@ class ChargeEngine:
             )
             return list(dict.fromkeys(strong_sites + weak_sites))
 
-    def search_for_tautomers(self, spec: Species) -> list[str]:
+    def search_for_tautomers_from_mol(self, ref_mol) -> list[str]:
         """
-        Search a species for tautomers, given a reference tautomer (which has a reference protomer).
+        Enumerate tautomers reachable from a reference structure with RDKit,
+        preserving stereochemistry and excluding duplicates of the reference.
         """
-        ref_mol = spec.tautomers[0].protomers[0].mol
         AllChem.AssignStereochemistry(ref_mol, cleanIt=True, force=True)
         results = self.tautomer_enumerator.Enumerate(mol = ref_mol)
 
@@ -97,7 +97,7 @@ class ChargeEngine:
                 atom_ids.extend(match[0:2]) # only take the C, =O groups
 
         atom_ids = list(set(atom_ids))
-        candidate_smiles = [spec.tautomers[0].protomers[0].smiles]
+        candidate_smiles = [AllChem.MolToSmiles(ref_mol)]
 
         # Keep only tautomers that preserve assigned tetrahedral stereochemistry
         # from the reference structure.
@@ -147,3 +147,8 @@ class ChargeEngine:
                 candidate_smiles.append(smiles)
                 
         return candidate_smiles
+
+    def search_for_tautomers(self, spec: Species) -> list[str]:
+        """Search a species for tautomers from its first tautomer's base protomer."""
+        ref_mol = spec.tautomers[0].protomers[0].mol
+        return self.search_for_tautomers_from_mol(ref_mol)

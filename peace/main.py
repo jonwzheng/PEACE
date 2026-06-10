@@ -233,7 +233,8 @@ def _build_cli_parser():
         action="store_true",
         help=(
             "When seeding adjacent charge states, use only the first unique "
-            "protonation/deprotonation product instead of merging the full shift pool."
+            "protonation/deprotonation product per structural tautomer instead of "
+            "keeping the full per-tautomer shift pool."
         ),
     )
     return p
@@ -247,27 +248,79 @@ def _make_species(smiles: str, *, engine: ChargeEngine) -> Species:
     return spec
 
 
-def _make_species_from_protomer_pool(
-    seed_smiles_list: list[str],
+def _shifted_smiles_for_tautomer(
+    source_taut: Tautomer,
     *,
     engine: ChargeEngine,
-    charge_seed_first_only: bool = False,
-) -> Species:
-    """Build a species from multiple protomer seeds, deduplicated, in tautomer 0."""
-    unique_smiles = list(
-        dict.fromkeys(canon_smiles(s) for s in seed_smiles_list if canon_smiles(s) is not None)
+    charge_step: int,
+    site_search_mode: str,
+) -> list[str]:
+    """Collect deduplicated one-step charge-shift SMILES from all protomers in one tautomer."""
+    shifted_smiles: list[str] = []
+    for protomer in source_taut.protomers.values():
+        shifted_smiles.extend(
+            _collect_charge_shifts_from_protomer(
+                protomer,
+                engine=engine,
+                charge_step=charge_step,
+                site_search_mode=site_search_mode,
+            )
+        )
+    return list(
+        dict.fromkeys(
+            canon_smiles(smiles)
+            for smiles in shifted_smiles
+            if canon_smiles(smiles) is not None
+        )
     )
-    if not unique_smiles:
-        raise ValueError("Protomer pool is empty after canonicalization.")
 
-    if charge_seed_first_only:
-        return _make_species(unique_smiles[0], engine=engine)
 
-    spec = _make_species(unique_smiles[0], engine=engine)
-    base_taut = spec.tautomers[0]
-    for smiles in unique_smiles[1:]:
+def _tautomer_from_shifted_smiles(shifted_smiles: list[str]) -> Tautomer:
+    """Build a tautomer whose protomers are the charge-shifted forms of one structural tautomer."""
+    base_taut = Tautomer.from_smiles(shifted_smiles[0])
+    for smiles in shifted_smiles[1:]:
         base_taut.embed_protomer(Protomer.from_smiles(smiles))
+    return base_taut
+
+
+def _species_from_tautomers(tautomers: dict[int, Tautomer]) -> Species:
+    """Assemble a species from a tautomer map while preserving tautomer indices."""
+    if not tautomers:
+        raise ValueError("Cannot build species from an empty tautomer map.")
+    items = sorted(tautomers.items())
+    spec = Species(items[0][1])
+    spec.tautomers = {idx: taut for idx, taut in items}
     return spec
+
+
+def _discover_missing_tautomers(spec: Species, *, engine: ChargeEngine) -> int:
+    """
+    Use RDKit tautomer enumeration on the first tautomer's base protomer and add any
+    structural tautomers not already represented by another tautomer's base protomer.
+    """
+    existing_base_smiles: set[str] = set()
+    for taut in spec.tautomers.values():
+        if 0 not in taut.protomers:
+            continue
+        canonical = canon_smiles(taut.protomers[0].smiles)
+        if canonical is not None:
+            existing_base_smiles.add(canonical)
+
+    first_taut_idx = min(spec.tautomers.keys())
+    ref_protomer = spec.tautomers[first_taut_idx].protomers[0]
+    if ref_protomer.mol is None:
+        return 0
+
+    candidate_smiles = engine.search_for_tautomers_from_mol(ref_protomer.mol)
+    added = 0
+    for smiles in candidate_smiles:
+        canonical = canon_smiles(smiles)
+        if canonical is None or canonical in existing_base_smiles:
+            continue
+        existing_base_smiles.add(canonical)
+        spec.embed_tautomer(Tautomer.from_smiles(smiles))
+        added += 1
+    return added
 
 
 def _collect_charge_shifts_from_protomer(
@@ -451,39 +504,48 @@ def _seed_adjacent_charge_species(
     if charge_step not in (-1, 1):
         raise ValueError("charge_step must be -1 or +1")
 
-    shifted_smiles: list[str] = []
-    source_protomer_count = 0
-    for taut in source_spec.tautomers.values():
-        source_protomer_count += len(taut.protomers)
-        for protomer in taut.protomers.values():
-            shifted_smiles.extend(
-                _collect_charge_shifts_from_protomer(
-                    protomer,
-                    engine=engine,
-                    charge_step=charge_step,
-                    site_search_mode=site_search_mode,
-                )
+    new_tautomers: dict[int, Tautomer] = {}
+    for taut_idx, source_taut in source_spec.tautomers.items():
+        source_protomer_count = len(source_taut.protomers)
+        shifted_smiles = _shifted_smiles_for_tautomer(
+            source_taut,
+            engine=engine,
+            charge_step=charge_step,
+            site_search_mode=site_search_mode,
+        )
+        if not shifted_smiles:
+            _log(
+                f"  Tautomer {taut_idx + 1}/{len(source_spec.tautomers)}: "
+                f"no charge shifts from {source_protomer_count} protomer(s)"
             )
+            continue
 
-    if not shifted_smiles:
+        if charge_seed_first_only and len(shifted_smiles) > 1:
+            _log(
+                f"  Tautomer {taut_idx + 1}/{len(source_spec.tautomers)}: "
+                f"using first of {len(shifted_smiles)} shift(s) "
+                f"(--charge-seed-first-only)"
+            )
+            shifted_smiles = shifted_smiles[:1]
+
+        new_tautomers[taut_idx] = _tautomer_from_shifted_smiles(shifted_smiles)
+        _log(
+            f"  Tautomer {taut_idx + 1}/{len(source_spec.tautomers)}: "
+            f"{source_protomer_count} source protomer(s) -> "
+            f"{len(shifted_smiles)} shifted protomer(s)"
+        )
+
+    if not new_tautomers:
         return None
 
-    unique_count = len(dict.fromkeys(shifted_smiles))
-    _log(
-        f"  Charge-shift pool from {len(source_spec.tautomers)} tautomer(s): "
-        f"{source_protomer_count} source protomer(s) "
-        f"-> {len(shifted_smiles)} shift(s), {unique_count} unique"
-    )
-    if charge_seed_first_only and unique_count > 1:
+    spec = _species_from_tautomers(new_tautomers)
+    added_tautomers = _discover_missing_tautomers(spec, engine=engine)
+    if added_tautomers:
         _log(
-            f"  Using first charge shift only (--charge-seed-first-only); "
-            f"discarded {unique_count - 1} alternative(s)"
+            f"  Tautomer enumeration added {added_tautomers} structural tautomer(s) "
+            f"not present in the per-tautomer charge-shift pool"
         )
-    return _make_species_from_protomer_pool(
-        shifted_smiles,
-        engine=engine,
-        charge_seed_first_only=charge_seed_first_only,
-    )
+    return spec
 
 
 def _ts() -> str:
