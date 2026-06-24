@@ -162,11 +162,10 @@ def _build_cli_parser():
     )
     p.add_argument(
         "--empirical-corrections",
-        type=bool,
-        default=True,
+       action="store_true",
         help=(
             "Before Boltzmann weighting, lower solution-phase free energies of zwitterionic protomers."
-            "Enabled by default."
+            "Disabled by default."
         ),
     )
     p.add_argument(
