@@ -10,6 +10,7 @@ import copy
 import textwrap
 import warnings
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
@@ -21,12 +22,15 @@ from .protomer import Species
 
 # Layout
 _MOL_SIZE = (280, 180)
-_LEGEND_HEIGHT = 100
+_LEGEND_HEIGHT = 108
+_POP_BAR_HEIGHT = 8
 _CELL_PAD = 6
 _GRID_GAP = 2
 _TITLE_HEIGHT = 32
 _HIGHLIGHT_MAX_RANK = 5  # highlight population ranks 0 .. 4
 _HIGHLIGHT_COLOR = (0, 105, 75)
+_POP_BAR_COLOR = (0, 105, 75)
+_POP_BAR_TRACK_COLOR = (230, 234, 236)
 _FONT_SIZE = 14
 _FONT_SIZE_SMALL = 13
 _FONT_SIZE_TITLE = 15
@@ -44,6 +48,9 @@ class ProtomerPlotEntry:
     boltzmann_fraction: Optional[float] = None
     solution_phase_free_energy_kcal_mol: Optional[float] = None
     delta_g_kcal_mol: Optional[float] = None
+    workflow_status: str = ""
+    workflow_error: str = ""
+    connectivity_mismatch: bool = False
 
 
 def _optional_float(value) -> Optional[float]:
@@ -53,6 +60,77 @@ def _optional_float(value) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_bool(value) -> bool:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return False
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes")
+
+
+def _optional_str(value) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return ""
+    return str(value).strip()
+
+
+def _has_workflow_issue(entry: ProtomerPlotEntry) -> bool:
+    if entry.connectivity_mismatch:
+        return True
+    if entry.workflow_error:
+        return True
+    return bool(entry.workflow_status)
+
+
+def _has_reported_thermo(entry: ProtomerPlotEntry) -> bool:
+    return (
+        entry.boltzmann_fraction is not None
+        or entry.delta_g_kcal_mol is not None
+        or entry.solution_phase_free_energy_kcal_mol is not None
+    )
+
+
+def _species_has_thermo(entries: list[ProtomerPlotEntry]) -> bool:
+    return any(_has_reported_thermo(e) for e in entries)
+
+
+def _issue_marker(entry: ProtomerPlotEntry, *, species_has_thermo: bool) -> Optional[str]:
+    if not species_has_thermo:
+        return None
+    issue = _has_workflow_issue(entry)
+    has_thermo = _has_reported_thermo(entry)
+    if issue and not has_thermo:
+        return "*"
+    if issue and has_thermo:
+        return "!"
+    if not has_thermo:
+        return "*"
+    return None
+
+
+def _format_fraction_pct(fraction: float) -> str:
+    pct = 100.0 * fraction
+    if pct >= 10.0:
+        return f"{pct:.2f}%"
+    if pct >= 0.01:
+        return f"{pct:.4f}%"
+    if pct >= 0.0001:
+        return f"{pct:.6f}%"
+    return f"{pct:.2e}%"
+
+
+def _max_species_fraction(entries: list[ProtomerPlotEntry]) -> Optional[float]:
+    fractions = [e.boltzmann_fraction for e in entries if e.boltzmann_fraction is not None]
+    return max(fractions) if fractions else None
+
+
+def _tautomer_fraction_sum(entries: list[ProtomerPlotEntry]) -> Optional[float]:
+    fractions = [e.boltzmann_fraction for e in entries if e.boltzmann_fraction is not None]
+    if not fractions:
+        return None
+    return float(sum(fractions))
 
 
 def _load_font(*, size: int = 11) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -91,6 +169,9 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
             boltzmann_fraction = None
             solution_energy = None
             delta_g = None
+            workflow_status = ""
+            workflow_error = ""
+            connectivity_mismatch = False
             if protomer.mol is not None:
                 if protomer.mol.HasProp("boltzmann_fraction"):
                     boltzmann_fraction = _optional_float(protomer.mol.GetProp("boltzmann_fraction"))
@@ -100,6 +181,12 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     )
                 if protomer.mol.HasProp("delta_g_kcal_mol"):
                     delta_g = _optional_float(protomer.mol.GetProp("delta_g_kcal_mol"))
+                if protomer.mol.HasProp("workflow_status"):
+                    workflow_status = _optional_str(protomer.mol.GetProp("workflow_status"))
+                if protomer.mol.HasProp("workflow_error"):
+                    workflow_error = _optional_str(protomer.mol.GetProp("workflow_error"))
+                if protomer.mol.HasProp("connectivity_mismatch"):
+                    connectivity_mismatch = _optional_bool(protomer.mol.GetProp("connectivity_mismatch"))
             display_mol = protomer.input_mol if protomer.input_mol is not None else protomer.mol
             entries.append(
                 ProtomerPlotEntry(
@@ -113,6 +200,9 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     boltzmann_fraction=boltzmann_fraction,
                     solution_phase_free_energy_kcal_mol=solution_energy,
                     delta_g_kcal_mol=delta_g,
+                    workflow_status=workflow_status,
+                    workflow_error=workflow_error,
+                    connectivity_mismatch=connectivity_mismatch,
                 )
             )
     return entries
@@ -140,6 +230,9 @@ def entries_from_dataframe(df: pd.DataFrame) -> list[ProtomerPlotEntry]:
                     row_dict.get("solution_phase_free_energy_kcal_mol")
                 ),
                 delta_g_kcal_mol=_optional_float(row_dict.get("delta_g_kcal_mol")),
+                workflow_status=_optional_str(row_dict.get("workflow_status")),
+                workflow_error=_optional_str(row_dict.get("workflow_error")),
+                connectivity_mismatch=_optional_bool(row_dict.get("connectivity_mismatch")),
             )
         )
     return entries
@@ -274,11 +367,44 @@ def _draw_legend(
 
     if entry.boltzmann_fraction is not None:
         _draw_labeled_value(
-            draw, x, y, "f: ", f"{entry.boltzmann_fraction:.4f}",
+            draw, x, y, "f: ", _format_fraction_pct(entry.boltzmann_fraction),
             font=font,
         )
 
     return legend
+
+
+def _draw_population_bar(width: int, fraction: Optional[float], *, max_fraction: Optional[float]) -> Image.Image:
+    bar = Image.new("RGB", (width, _POP_BAR_HEIGHT), "white")
+    if fraction is None or max_fraction is None or max_fraction <= 0:
+        return bar
+    draw = ImageDraw.Draw(bar)
+    draw.rectangle([0, 1, width - 1, _POP_BAR_HEIGHT - 2], fill=_POP_BAR_TRACK_COLOR)
+    fill_w = max(1, int(round(width * fraction / max_fraction)))
+    draw.rectangle([0, 1, fill_w - 1, _POP_BAR_HEIGHT - 2], fill=_POP_BAR_COLOR)
+    return bar
+
+
+def _draw_issue_marker(img: Image.Image, marker: Optional[str]) -> Image.Image:
+    if not marker:
+        return img
+    overlay = img.copy()
+    draw = ImageDraw.Draw(overlay)
+    font = _load_font(size=_FONT_SIZE + 4)
+    color = "#b45309" if marker == "!" else "#b91c1c"
+    tw = draw.textlength(marker, font=font)
+    x = img.width - tw - 8
+    y = 4
+    pad = 3
+    draw.rounded_rectangle(
+        [x - pad, y - pad, x + tw + pad, y + _FONT_SIZE + pad],
+        radius=4,
+        fill="white",
+        outline=color,
+        width=2,
+    )
+    draw.text((x, y), marker, font=font, fill=color)
+    return overlay
 
 
 def _draw_rank_highlight(cell: Image.Image, rank: Optional[int]) -> Image.Image:
@@ -332,29 +458,42 @@ def _compose_cell(
     entry: ProtomerPlotEntry,
     *,
     species_rank: Optional[int],
+    max_fraction: Optional[float] = None,
+    species_has_thermo: bool = False,
 ) -> Image.Image:
-    cell_w = _MOL_SIZE[0] + 2 * _CELL_PAD
-    cell_h = _MOL_SIZE[1] + _LEGEND_HEIGHT + 2 * _CELL_PAD
+    inner_w = _MOL_SIZE[0]
+    cell_w = inner_w + 2 * _CELL_PAD
+    cell_h = _MOL_SIZE[1] + _POP_BAR_HEIGHT + _LEGEND_HEIGHT + 2 * _CELL_PAD
 
     mol = _display_mol_for_entry(entry)
     mol_img = _mol_panel(mol, highlights=list(entry.ionization_sites))
+    mol_img = _draw_issue_marker(mol_img, _issue_marker(entry, species_has_thermo=species_has_thermo))
+    pop_bar = _draw_population_bar(inner_w, entry.boltzmann_fraction, max_fraction=max_fraction)
     legend_img = _draw_legend(
         entry,
-        width=cell_w - 2 * _CELL_PAD,
+        width=inner_w,
         species_rank=species_rank,
     )
 
     cell = Image.new("RGB", (cell_w, cell_h), "white")
     cell.paste(mol_img, (_CELL_PAD, _CELL_PAD))
-    cell.paste(legend_img, (_CELL_PAD, _CELL_PAD + _MOL_SIZE[1]))
+    cell.paste(pop_bar, (_CELL_PAD, _CELL_PAD + _MOL_SIZE[1]))
+    cell.paste(legend_img, (_CELL_PAD, _CELL_PAD + _MOL_SIZE[1] + _POP_BAR_HEIGHT))
     return _draw_rank_highlight(cell, species_rank)
 
 
-def _panel_title(entries: list[ProtomerPlotEntry], width: int) -> Optional[Image.Image]:
+def _panel_title(
+    entries: list[ProtomerPlotEntry],
+    width: int,
+    *,
+    tautomer_fraction_sum: Optional[float] = None,
+) -> Optional[Image.Image]:
     if not entries:
         return None
     first = entries[0]
     parts = [f"Tautomer {first.tautomer_id}"]
+    if tautomer_fraction_sum is not None:
+        parts.append(f"f: {_format_fraction_pct(tautomer_fraction_sum)}")
     if first.species_id:
         parts.append(f"species: {first.species_id}")
     if first.formal_charge is not None:
@@ -374,16 +513,21 @@ def plot_tautomer_entries(
     n_columns: int,
     *,
     species_ranks: Optional[dict[tuple[int, int], int]] = None,
+    max_fraction: Optional[float] = None,
+    species_has_thermo: bool = False,
 ) -> Any:
     """Plot a single tautomer's protomers in a grid. Returns a PIL image."""
     if not entries:
         return Image.new("RGB", (_MOL_SIZE[0], _MOL_SIZE[1]), "white")
 
     ranks = species_ranks or {}
+    tautomer_f = _tautomer_fraction_sum(entries)
     cells = [
         _compose_cell(
             entry,
             species_rank=ranks.get((entry.tautomer_id, entry.protomer_id)),
+            max_fraction=max_fraction,
+            species_has_thermo=species_has_thermo,
         )
         for entry in entries
     ]
@@ -396,7 +540,7 @@ def plot_tautomer_entries(
 
     grid_w = n_columns * cell_w + (n_columns - 1) * _GRID_GAP
     grid_h = n_rows * cell_h + (n_rows - 1) * _GRID_GAP
-    title = _panel_title(entries, grid_w)
+    title = _panel_title(entries, grid_w, tautomer_fraction_sum=tautomer_f)
     total_h = grid_h + (title.height if title else 0)
 
     canvas = Image.new("RGB", (grid_w, total_h), "white")
@@ -422,6 +566,8 @@ def plot_entries(entries: list[ProtomerPlotEntry], *, n_columns: int = 5) -> lis
         by_tautomer.setdefault(int(entry.tautomer_id), []).append(entry)
 
     species_ranks = _species_fraction_ranks(entries)
+    max_fraction = _max_species_fraction(entries)
+    species_has_thermo = _species_has_thermo(entries)
     imgs = []
     for tautomer_id in sorted(by_tautomer.keys()):
         taut_entries = by_tautomer[tautomer_id]
@@ -436,9 +582,41 @@ def plot_entries(entries: list[ProtomerPlotEntry], *, n_columns: int = 5) -> lis
         else:
             taut_entries = sorted(taut_entries, key=lambda e: e.protomer_id)
         imgs.append(
-            plot_tautomer_entries(taut_entries, n_columns, species_ranks=species_ranks)
+            plot_tautomer_entries(
+                taut_entries,
+                n_columns,
+                species_ranks=species_ranks,
+                max_fraction=max_fraction,
+                species_has_thermo=species_has_thermo,
+            )
         )
     return imgs
+
+
+def resolve_plot_save_path(base_path: str | Path, *labels: str) -> Path:
+    """Build a plot output path, appending labels before the suffix when provided."""
+    path = Path(base_path)
+    if not labels:
+        return path
+    suffix = path.suffix or ".png"
+    stem = path.stem
+    label = "_".join(str(part) for part in labels if part is not None and str(part) != "")
+    return path.with_name(f"{stem}_{label}{suffix}")
+
+
+def save_plot_images(
+    imgs: list,
+    path: str | Path,
+    *,
+    mode: str = "vertical",
+) -> Path:
+    """Combine plot panels and write a single image file."""
+    from .common import combine_images
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    combine_images(imgs, mode=mode).save(out)
+    return out
 
 
 def _group_dataframe(df: pd.DataFrame) -> dict[tuple, pd.DataFrame]:

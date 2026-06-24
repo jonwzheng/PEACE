@@ -60,14 +60,10 @@ def extract_matches_from_smarts_collection(query_mol: Mol, groups: list[Mol], si
 
     return matching_sites    
 
-def show_images(imgs: list, buffer: int = 6, mode = "vertical"):
-    """ 
-    Given a list of images, return 1 image.
-    Adapted, and modified, from Greg Landrum's blog: 
-    https://greglandrum.github.io/rdkit-blog/posts/2023-05-26-drawing-options-explained.html
-    """
+def combine_images(imgs: list, buffer: int = 6, mode: str = "vertical") -> Image.Image:
+    """Stack images vertically or horizontally into one RGB canvas."""
     if not imgs:
-        return
+        raise ValueError("combine_images requires at least one image.")
 
     height = 0
     width = 0
@@ -102,7 +98,27 @@ def show_images(imgs: list, buffer: int = 6, mode = "vertical"):
             res.paste(img, (offset, 0))
             offset += img.width + gap
 
-    res.show()
+    return res
+
+
+def show_images(imgs: list, buffer: int = 6, mode = "vertical", save_path=None):
+    """ 
+    Given a list of images, display or save one combined image.
+    Adapted, and modified, from Greg Landrum's blog: 
+    https://greglandrum.github.io/rdkit-blog/posts/2023-05-26-drawing-options-explained.html
+    """
+    if not imgs:
+        return
+
+    res = combine_images(imgs, buffer=buffer, mode=mode)
+    if save_path is not None:
+        from pathlib import Path
+
+        out = Path(save_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        res.save(out)
+    else:
+        res.show()
 
 def canon_smiles(smiles: str) -> str:
     """

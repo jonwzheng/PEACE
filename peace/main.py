@@ -68,6 +68,12 @@ def _build_cli_parser():
         help="Render protomer plots from an existing results CSV and exit (no enumeration/solvation).",
     )
     p.add_argument(
+        "--output-plots",
+        type=str,
+        default=None,
+        help="Save combined protomer plot image(s) to this PNG path (in addition to displaying them).",
+    )
+    p.add_argument(
         "--conformer-mode",
         type=str,
         default="mmff94",
@@ -683,7 +689,10 @@ if __name__ == "__main__":
             n_columns=5,
         )
         if imgs:
-            show_images(imgs, mode="vertical")
+            save_path = Path(args.output_plots) if args.output_plots else None
+            show_images(imgs, mode="vertical", save_path=save_path)
+            if save_path is not None:
+                _log(f"Saved protomer plot to: {save_path.resolve()}")
         else:
             _log("No protomer images produced (empty filter or empty CSV).")
         end_ts = time.time()
@@ -1167,7 +1176,18 @@ if __name__ == "__main__":
                 n_columns=5,
             )
             if imgs:
-                show_images(imgs, mode="vertical")
+                if args.output_plots:
+                    if len(requested_charges) > 1:
+                        save_path = visualization.resolve_plot_save_path(
+                            args.output_plots, f"charge{charge_state}"
+                        )
+                    else:
+                        save_path = Path(args.output_plots)
+                else:
+                    save_path = None
+                show_images(imgs, mode="vertical", save_path=save_path)
+                if save_path is not None:
+                    _log(f"Saved protomer plot to: {save_path.resolve()}")
             else:
                 _log("No protomer images produced for this charge state.")
     frames = []
