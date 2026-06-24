@@ -7,16 +7,29 @@ Works from a Species object when available, or directly from a results CSV dataf
 from __future__ import annotations
 
 import copy
+import textwrap
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+from PIL import Image, ImageDraw, ImageFont
 from rdkit.Chem import AllChem, Draw
 
-from .common import canon_smiles
 from .protomer import Species
+
+# Layout
+_MOL_SIZE = (280, 180)
+_LEGEND_HEIGHT = 100
+_CELL_PAD = 6
+_GRID_GAP = 2
+_TITLE_HEIGHT = 32
+_HIGHLIGHT_MAX_RANK = 5  # highlight population ranks 0 .. 4
+_HIGHLIGHT_COLOR = (0, 105, 75)
+_FONT_SIZE = 14
+_FONT_SIZE_SMALL = 13
+_FONT_SIZE_TITLE = 15
 
 
 @dataclass
@@ -30,6 +43,7 @@ class ProtomerPlotEntry:
     ionization_sites: list[int] = field(default_factory=list)
     boltzmann_fraction: Optional[float] = None
     solution_phase_free_energy_kcal_mol: Optional[float] = None
+    delta_g_kcal_mol: Optional[float] = None
 
 
 def _optional_float(value) -> Optional[float]:
@@ -39,6 +53,24 @@ def _optional_float(value) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _load_font(*, size: int = 11) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    try:
+        return ImageFont.load_default(size=size)
+    except (OSError, TypeError):
+        return ImageFont.load_default()
+
+
+def _draw_emphasis_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    *,
+    font: ImageFont.ImageFont,
+    fill: str = "#222222",
+) -> None:
+    draw.text(xy, text, font=font, fill=fill, stroke_width=0.5, stroke_fill=fill)
 
 
 def _display_mol_for_entry(entry: ProtomerPlotEntry):
@@ -58,6 +90,7 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
         for prot_idx, protomer in tautomer.protomers.items():
             boltzmann_fraction = None
             solution_energy = None
+            delta_g = None
             if protomer.mol is not None:
                 if protomer.mol.HasProp("boltzmann_fraction"):
                     boltzmann_fraction = _optional_float(protomer.mol.GetProp("boltzmann_fraction"))
@@ -65,6 +98,8 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     solution_energy = _optional_float(
                         protomer.mol.GetProp("solution_phase_free_energy_kcal_mol")
                     )
+                if protomer.mol.HasProp("delta_g_kcal_mol"):
+                    delta_g = _optional_float(protomer.mol.GetProp("delta_g_kcal_mol"))
             display_mol = protomer.input_mol if protomer.input_mol is not None else protomer.mol
             entries.append(
                 ProtomerPlotEntry(
@@ -77,6 +112,7 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     ionization_sites=list(protomer.ionization_sites),
                     boltzmann_fraction=boltzmann_fraction,
                     solution_phase_free_energy_kcal_mol=solution_energy,
+                    delta_g_kcal_mol=delta_g,
                 )
             )
     return entries
@@ -103,6 +139,7 @@ def entries_from_dataframe(df: pd.DataFrame) -> list[ProtomerPlotEntry]:
                 solution_phase_free_energy_kcal_mol=_optional_float(
                     row_dict.get("solution_phase_free_energy_kcal_mol")
                 ),
+                delta_g_kcal_mol=_optional_float(row_dict.get("delta_g_kcal_mol")),
             )
         )
     return entries
@@ -155,44 +192,225 @@ def filter_plot_entries(
     raise ValueError(f"Unknown visualization mode: {mode}")
 
 
-def _legend_for_entry(entry: ProtomerPlotEntry) -> str:
-    f_i = ""
-    if entry.boltzmann_fraction is not None:
-        f_i = f"f_i: {entry.boltzmann_fraction:.4f}"
-    return f"ID: {entry.protomer_id} | SMILES: {entry.smiles}\n {f_i}".rstrip()
-
-
-def plot_tautomer_entries(entries: list[ProtomerPlotEntry], n_columns: int) -> Any:
-    """Plot a single tautomer's protomers in a grid. Returns an RDKit PIL image."""
-    mols = [_display_mol_for_entry(entry) for entry in entries]
-    legends = [_legend_for_entry(entry) for entry in entries]
-    highlights = [list(entry.ionization_sites) for entry in entries]
-
-    n_rows = int(np.ceil(len(mols) / n_columns)) if mols else 1
-    n_padding = n_rows * n_columns - len(mols)
-    mols.extend([None] * n_padding)
-    legends.extend([""] * n_padding)
-    highlights.extend([[] for _ in range(n_padding)])
-
-    mols_matrix = np.reshape(mols, (n_rows, n_columns))
-    legends_matrix = np.reshape(legends, (n_rows, n_columns))
-    has_highlights = any(bool(h) for h in highlights)
-    if has_highlights:
-        highlights_matrix = [
-            highlights[row * n_columns : (row + 1) * n_columns]
-            for row in range(n_rows)
-        ]
-        return Draw.MolsMatrixToGridImage(
-            molsMatrix=mols_matrix.tolist(),
-            legendsMatrix=legends_matrix.tolist(),
-            subImgSize=(300, 200),
-            highlightAtomListsMatrix=highlights_matrix,
-        )
-    return Draw.MolsMatrixToGridImage(
-        molsMatrix=mols_matrix.tolist(),
-        legendsMatrix=legends_matrix.tolist(),
-        subImgSize=(300, 200),
+def _species_fraction_ranks(entries: list[ProtomerPlotEntry]) -> dict[tuple[int, int], int]:
+    """Map (tautomer_id, protomer_id) -> rank across the full species (0 = highest f)."""
+    ranked = [e for e in entries if e.boltzmann_fraction is not None]
+    if not ranked:
+        return {}
+    ranked.sort(
+        key=lambda e: (-e.boltzmann_fraction, e.tautomer_id, e.protomer_id)
     )
+    return {(e.tautomer_id, e.protomer_id): idx for idx, e in enumerate(ranked)}
+
+
+def _draw_labeled_value(
+    draw: ImageDraw.ImageDraw,
+    x: float,
+    y: float,
+    label: str,
+    value: str,
+    *,
+    font: ImageFont.ImageFont,
+    fill: str = "#222222",
+) -> float:
+    _draw_emphasis_text(draw, (x, y), label, font=font, fill=fill)
+    x += draw.textlength(label, font=font)
+    draw.text((x, y), value, font=font, fill=fill)
+    return x + draw.textlength(value, font=font)
+
+
+def _wrap_smiles(smiles: str, width: int = 42) -> list[str]:
+    if len(smiles) <= width:
+        return [smiles]
+    return textwrap.wrap(smiles, width=width, break_long_words=True, break_on_hyphens=False) or [smiles]
+
+
+def _draw_legend(
+    entry: ProtomerPlotEntry,
+    *,
+    width: int,
+    species_rank: Optional[int],
+) -> Image.Image:
+    font = _load_font(size=_FONT_SIZE)
+    font_small = _load_font(size=_FONT_SIZE_SMALL)
+
+    legend = Image.new("RGB", (width, _LEGEND_HEIGHT), "white")
+    draw = ImageDraw.Draw(legend)
+
+    y = 2
+    x = 4
+    x = _draw_labeled_value(
+        draw, x, y, "ID: ", str(entry.protomer_id),
+        font=font,
+    )
+    draw.text((x + 6, y), " ", font=font, fill="#888888")
+    x = x + 6 + draw.textlength(" ", font=font) + 6
+    _draw_emphasis_text(draw, (x, y), "SMILES:", font=font)
+    smiles_label_w = draw.textlength("SMILES:", font=font) + 4
+
+    smiles_lines = _wrap_smiles(entry.smiles, width=max(24, (width - 12) // 7))
+    smiles_y = y
+    if smiles_lines:
+        draw.text((x + smiles_label_w, smiles_y), smiles_lines[0], font=font_small, fill="#333333")
+        for line in smiles_lines[1:]:
+            smiles_y += 16
+            draw.text((x + smiles_label_w, smiles_y), line, font=font_small, fill="#333333")
+
+    y = smiles_y + 18
+    x = 4
+    if species_rank is not None:
+        x = _draw_labeled_value(
+            draw, x, y, "rank: ", str(species_rank),
+            font=font,
+        )
+        x += 10
+
+    if entry.delta_g_kcal_mol is not None:
+        x = _draw_labeled_value(
+            draw, x, y, "diff G: ", f"{entry.delta_g_kcal_mol:.2f} kcal/mol",
+            font=font,
+        )
+        x += 10
+
+    if entry.boltzmann_fraction is not None:
+        _draw_labeled_value(
+            draw, x, y, "f: ", f"{entry.boltzmann_fraction:.4f}",
+            font=font,
+        )
+
+    return legend
+
+
+def _draw_rank_highlight(cell: Image.Image, rank: Optional[int]) -> Image.Image:
+    if rank is None or rank >= _HIGHLIGHT_MAX_RANK:
+        return cell
+
+    overlay = Image.new("RGBA", cell.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    w, h = cell.size
+
+    base_alpha = int(230 * (1.0 - 0.17 * rank))
+    base_width = max(2, 6 - rank)
+    n_layers = max(1, 4 - rank)
+
+    for layer in range(n_layers):
+        inset = layer * 2
+        alpha = max(35, int(base_alpha * (1.0 - 0.32 * layer)))
+        line_w = max(1, base_width - layer)
+        draw.rectangle(
+            [inset, inset, w - 1 - inset, h - 1 - inset],
+            outline=(*_HIGHLIGHT_COLOR, alpha),
+            width=line_w,
+        )
+
+    base = cell.convert("RGBA")
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+
+def _mol_panel(mol, *, highlights: list[int]) -> Image.Image:
+    if mol is None:
+        panel = Image.new("RGB", _MOL_SIZE, "white")
+        draw = ImageDraw.Draw(panel)
+        font = _load_font(size=_FONT_SIZE + 2)
+        text = "invalid structure"
+        tw = draw.textlength(text, font=font)
+        draw.text(((_MOL_SIZE[0] - tw) / 2, (_MOL_SIZE[1] - 14) / 2), text, font=font, fill="#999999")
+        return panel
+
+    kwargs: dict[str, Any] = {"size": _MOL_SIZE}
+    if highlights:
+        kwargs["highlightAtoms"] = highlights
+    img = Draw.MolToImage(mol, **kwargs)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    if img.size != _MOL_SIZE:
+        img = img.resize(_MOL_SIZE, Image.Resampling.LANCZOS)
+    return img
+
+
+def _compose_cell(
+    entry: ProtomerPlotEntry,
+    *,
+    species_rank: Optional[int],
+) -> Image.Image:
+    cell_w = _MOL_SIZE[0] + 2 * _CELL_PAD
+    cell_h = _MOL_SIZE[1] + _LEGEND_HEIGHT + 2 * _CELL_PAD
+
+    mol = _display_mol_for_entry(entry)
+    mol_img = _mol_panel(mol, highlights=list(entry.ionization_sites))
+    legend_img = _draw_legend(
+        entry,
+        width=cell_w - 2 * _CELL_PAD,
+        species_rank=species_rank,
+    )
+
+    cell = Image.new("RGB", (cell_w, cell_h), "white")
+    cell.paste(mol_img, (_CELL_PAD, _CELL_PAD))
+    cell.paste(legend_img, (_CELL_PAD, _CELL_PAD + _MOL_SIZE[1]))
+    return _draw_rank_highlight(cell, species_rank)
+
+
+def _panel_title(entries: list[ProtomerPlotEntry], width: int) -> Optional[Image.Image]:
+    if not entries:
+        return None
+    first = entries[0]
+    parts = [f"Tautomer {first.tautomer_id}"]
+    if first.species_id:
+        parts.append(f"species: {first.species_id}")
+    if first.formal_charge is not None:
+        parts.append(f"charge: {first.formal_charge:+d}")
+    title = "  ·  ".join(parts)
+
+    banner = Image.new("RGB", (width, _TITLE_HEIGHT), "#f4f6f8")
+    draw = ImageDraw.Draw(banner)
+    font = _load_font(size=_FONT_SIZE_TITLE)
+    _draw_emphasis_text(draw, (8, 6), title, font=font, fill="#1a1a1a")
+    draw.line([(0, _TITLE_HEIGHT - 1), (width, _TITLE_HEIGHT - 1)], fill="#d0d4d8", width=1)
+    return banner
+
+
+def plot_tautomer_entries(
+    entries: list[ProtomerPlotEntry],
+    n_columns: int,
+    *,
+    species_ranks: Optional[dict[tuple[int, int], int]] = None,
+) -> Any:
+    """Plot a single tautomer's protomers in a grid. Returns a PIL image."""
+    if not entries:
+        return Image.new("RGB", (_MOL_SIZE[0], _MOL_SIZE[1]), "white")
+
+    ranks = species_ranks or {}
+    cells = [
+        _compose_cell(
+            entry,
+            species_rank=ranks.get((entry.tautomer_id, entry.protomer_id)),
+        )
+        for entry in entries
+    ]
+
+    n_rows = int(np.ceil(len(cells) / n_columns))
+    n_padding = n_rows * n_columns - len(cells)
+    cell_w, cell_h = cells[0].size
+    for _ in range(n_padding):
+        cells.append(Image.new("RGB", (cell_w, cell_h), "white"))
+
+    grid_w = n_columns * cell_w + (n_columns - 1) * _GRID_GAP
+    grid_h = n_rows * cell_h + (n_rows - 1) * _GRID_GAP
+    title = _panel_title(entries, grid_w)
+    total_h = grid_h + (title.height if title else 0)
+
+    canvas = Image.new("RGB", (grid_w, total_h), "white")
+    y_offset = title.height if title else 0
+    if title:
+        canvas.paste(title, (0, 0))
+
+    for idx, cell in enumerate(cells):
+        row, col = divmod(idx, n_columns)
+        x = col * (cell_w + _GRID_GAP)
+        y = y_offset + row * (cell_h + _GRID_GAP)
+        canvas.paste(cell, (x, y))
+
+    return canvas
 
 
 def plot_entries(entries: list[ProtomerPlotEntry], *, n_columns: int = 5) -> list[Any]:
@@ -203,10 +421,23 @@ def plot_entries(entries: list[ProtomerPlotEntry], *, n_columns: int = 5) -> lis
     for entry in entries:
         by_tautomer.setdefault(int(entry.tautomer_id), []).append(entry)
 
+    species_ranks = _species_fraction_ranks(entries)
     imgs = []
     for tautomer_id in sorted(by_tautomer.keys()):
-        taut_entries = sorted(by_tautomer[tautomer_id], key=lambda e: e.protomer_id)
-        imgs.append(plot_tautomer_entries(taut_entries, n_columns))
+        taut_entries = by_tautomer[tautomer_id]
+        if species_ranks:
+            taut_entries = sorted(
+                taut_entries,
+                key=lambda e: (
+                    species_ranks.get((e.tautomer_id, e.protomer_id), 10**9),
+                    e.protomer_id,
+                ),
+            )
+        else:
+            taut_entries = sorted(taut_entries, key=lambda e: e.protomer_id)
+        imgs.append(
+            plot_tautomer_entries(taut_entries, n_columns, species_ranks=species_ranks)
+        )
     return imgs
 
 

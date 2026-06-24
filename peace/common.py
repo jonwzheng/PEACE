@@ -60,40 +60,48 @@ def extract_matches_from_smarts_collection(query_mol: Mol, groups: list[Mol], si
 
     return matching_sites    
 
-def show_images(imgs: list, buffer: int = 20, mode = "vertical"):
+def show_images(imgs: list, buffer: int = 6, mode = "vertical"):
     """ 
     Given a list of images, return 1 image.
-    Adapted from Greg Landrum's blog: 
+    Adapted, and modified, from Greg Landrum's blog: 
     https://greglandrum.github.io/rdkit-blog/posts/2023-05-26-drawing-options-explained.html
     """
+    if not imgs:
+        return
+
     height = 0
-    width = 0  
+    width = 0
     assert mode in ("vertical", "horizontal")
 
+    gap = max(0, buffer)
     for img in imgs:
+        if img.mode != "RGB":
+            img = img.convert("RGB")
         if mode == "vertical":
             width = max(width, img.width)
-            height += img.height + buffer
-
+            height += img.height
         elif mode == "horizontal":
             height = max(height, img.height)
             width += img.width
-    
-    if mode == "vertical":
-        width += buffer*(len(imgs)-1)
-    elif mode == "horizontal":        
-        height += buffer*(len(imgs)-1)
-    
-    res = Image.new("RGBA",(width,height))
-    x = 0
-    for img in imgs:
+
+    if len(imgs) > 1:
         if mode == "vertical":
-            res.paste(img,(0,x))
-            x += img.height + buffer
-        elif mode == "horizontal":        
-            res.paste(img,(x,0))
-            x += img.width + buffer
-    
+            height += gap * (len(imgs) - 1)
+        elif mode == "horizontal":
+            width += gap * (len(imgs) - 1)
+
+    res = Image.new("RGB", (width, height), "white")
+    offset = 0
+    for img in imgs:
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        if mode == "vertical":
+            res.paste(img, (0, offset))
+            offset += img.height + gap
+        elif mode == "horizontal":
+            res.paste(img, (offset, 0))
+            offset += img.width + gap
+
     res.show()
 
 def canon_smiles(smiles: str) -> str:
