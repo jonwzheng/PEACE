@@ -278,6 +278,7 @@ def run_gxtb_optimization(
     scratch_dir: Path,
     xyz_path: Path,
     xtb_executable: str,
+    opt_level: str,
     charge: int,
     timeout_s: Optional[int],
     dry_run: bool,
@@ -287,7 +288,7 @@ def run_gxtb_optimization(
 ) -> tuple[Path, Optional[float], Optional[float]]:
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} "
-        f"--opt "
+        f"--opt {shlex.quote(opt_level)} "
         f'--driver "gxtb -grad -c xtbdriver.xyz" '
         f"{shlex.quote(xyz_path.name)} "
         f"--chrg {shlex.quote(str(charge))}"

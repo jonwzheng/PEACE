@@ -76,12 +76,18 @@ def _optional_str(value) -> str:
     return str(value).strip()
 
 
+def _is_relaxed_convergence_status(status: str) -> bool:
+    return status.startswith("optimization_retried_with_convergence:")
+
+
 def _has_workflow_issue(entry: ProtomerPlotEntry) -> bool:
     if entry.connectivity_mismatch:
         return True
     if entry.workflow_error:
         return True
-    return bool(entry.workflow_status)
+    if entry.workflow_status and not _is_relaxed_convergence_status(entry.workflow_status):
+        return True
+    return False
 
 
 def _has_reported_thermo(entry: ProtomerPlotEntry) -> bool:
@@ -107,6 +113,8 @@ def _issue_marker(entry: ProtomerPlotEntry, *, species_has_thermo: bool) -> Opti
         return "!"
     if not has_thermo:
         return "*"
+    if _is_relaxed_convergence_status(entry.workflow_status):
+        return "/"
     return None
 
 
@@ -391,7 +399,7 @@ def _draw_issue_marker(img: Image.Image, marker: Optional[str]) -> Image.Image:
     overlay = img.copy()
     draw = ImageDraw.Draw(overlay)
     font = _load_font(size=_FONT_SIZE + 4)
-    color = "#b45309" if marker == "!" else "#b91c1c"
+    color = "#b45309" if marker == "!" else "#2563eb" if marker == "/" else "#b91c1c"
     tw = draw.textlength(marker, font=font)
     x = img.width - tw - 8
     y = 4

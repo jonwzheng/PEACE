@@ -25,6 +25,7 @@ from .calculators import (
     run_skala_single_point_energy,
     run_xtb_optimization,
 )
+from .calculators.common import looser_opt_convergence_level
 from .protomer import Protomer, Species, Tautomer
 
 HARTREE_TO_KCAL_MOL = 627.5094740631
@@ -42,6 +43,154 @@ def _resolve_gxtb_optimization_runner(xtb_version: XtbVersion):
     if xtb_version == "default":
         return run_gxtb2_optimization
     return run_gxtb_optimization
+
+
+_RELAXED_OPT_WORKFLOW_STATUS_PREFIX = "optimization_retried_with_convergence:"
+
+
+def _reset_optimization_artifacts(scratch_dir: Path) -> None:
+    for name in ("xtbopt.xyz", "xtbopt.log", "xtbopt_run.log", "gxtbopt_run.log"):
+        path = scratch_dir / name
+        if path.exists():
+            path.unlink()
+
+
+def _mark_relaxed_optimization(
+    protomer: Protomer,
+    *,
+    retried_opt_level: str,
+    initial_opt_level: str,
+    engine: str,
+) -> None:
+    if protomer.mol is None:
+        return
+    _set_mol_prop_str(
+        protomer.mol,
+        "workflow_status",
+        f"{_RELAXED_OPT_WORKFLOW_STATUS_PREFIX}{retried_opt_level}",
+    )
+    _set_mol_prop_str(protomer.mol, "optimization_opt_level", retried_opt_level)
+    _set_mol_prop_str(protomer.mol, "optimization_initial_opt_level", initial_opt_level)
+    _set_mol_prop_str(protomer.mol, "optimization_engine", engine)
+
+
+def _run_xtb_optimization_with_retry(
+    *,
+    protomer: Protomer,
+    mol: Chem.Mol,
+    scratch_dir: Path,
+    input_xyz_path: Path,
+    xtb_executable: str,
+    opt_level: str,
+    charge: int,
+    solvent: str,
+    timeout_s: Optional[int],
+    dry_run: bool,
+    log_paths: list[Path],
+) -> tuple[Path, Optional[float], Optional[float]]:
+    try:
+        return run_xtb_optimization(
+            mol=mol,
+            scratch_dir=scratch_dir,
+            input_xyz_path=input_xyz_path,
+            xtb_executable=xtb_executable,
+            opt_level=opt_level,
+            charge=charge,
+            solvent=solvent,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
+        )
+    except (RuntimeError, FileNotFoundError) as exc:
+        looser_level = looser_opt_convergence_level(opt_level)
+        if looser_level is None:
+            raise
+        _log_status(
+            log_paths,
+            "WARN",
+            "xTB optimization failed at "
+            f"convergence={opt_level}; retrying from initial geometry with "
+            f"convergence={looser_level}: {exc}",
+        )
+        _reset_optimization_artifacts(scratch_dir)
+        result = run_xtb_optimization(
+            mol=mol,
+            scratch_dir=scratch_dir,
+            input_xyz_path=input_xyz_path,
+            xtb_executable=xtb_executable,
+            opt_level=looser_level,
+            charge=charge,
+            solvent=solvent,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
+        )
+        _mark_relaxed_optimization(
+            protomer,
+            retried_opt_level=looser_level,
+            initial_opt_level=opt_level,
+            engine="xtb",
+        )
+        return result
+
+
+def _run_gxtb_optimization_with_retry(
+    *,
+    protomer: Protomer,
+    scratch_dir: Path,
+    input_xyz_path: Path,
+    input_mol: Optional[Chem.Mol],
+    xtb_executable: str,
+    xtb_version: XtbVersion,
+    opt_level: str,
+    charge: int,
+    timeout_s: Optional[int],
+    dry_run: bool,
+    log_paths: list[Path],
+) -> tuple[Path, Optional[float], Optional[float]]:
+    run_gxtb_opt = _resolve_gxtb_optimization_runner(xtb_version)
+    opt_kwargs = dict(
+        scratch_dir=scratch_dir,
+        xyz_path=input_xyz_path,
+        xtb_executable=xtb_executable,
+        opt_level=opt_level,
+        charge=charge,
+        timeout_s=timeout_s,
+        dry_run=dry_run,
+        log_paths=log_paths,
+        run_command=_run,
+        log_status=_log_status,
+    )
+    if xtb_version == "default":
+        opt_kwargs["input_mol"] = input_mol
+
+    try:
+        return run_gxtb_opt(**opt_kwargs)
+    except (RuntimeError, FileNotFoundError) as exc:
+        looser_level = looser_opt_convergence_level(opt_level)
+        if looser_level is None:
+            raise
+        _log_status(
+            log_paths,
+            "WARN",
+            "g-xTB optimization failed at "
+            f"convergence={opt_level}; retrying from initial geometry with "
+            f"convergence={looser_level}: {exc}",
+        )
+        _reset_optimization_artifacts(scratch_dir)
+        opt_kwargs["opt_level"] = looser_level
+        result = run_gxtb_opt(**opt_kwargs)
+        _mark_relaxed_optimization(
+            protomer,
+            retried_opt_level=looser_level,
+            initial_opt_level=opt_level,
+            engine="gxtb",
+        )
+        return result
 
 def _append_log(log_path: Path, message: str) -> None:
     timestamp = datetime.now().isoformat(timespec="seconds")
@@ -796,7 +945,7 @@ def run_protomer_screening(
     solvent: Literal["water"] = "water",
     gfn: int = 2,
     optimization_engine: Literal["xtb", "aimnet2"] = "xtb",
-    opt_level: Literal["loose", "tight", "vtight"] = "loose",
+    opt_level: str = "loose",
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -860,19 +1009,18 @@ def run_protomer_screening(
         input_xyz_path = _write_workflow_inputs(mol, scratch_dir, charge, log_paths)
         _progress("optimizing screening geometry")
         if optimization_engine == "xtb":
-            opt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_xtb_optimization(
+            opt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = _run_xtb_optimization_with_retry(
+                protomer=protomer,
                 mol=mol,
                 scratch_dir=scratch_dir,
                 input_xyz_path=input_xyz_path,
                 xtb_executable=xtb_executable,
-                solvent=solvent,
                 opt_level=opt_level,
                 charge=charge,
+                solvent=solvent,
                 timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
-                run_command=_run,
-                log_status=_log_status,
             )
         elif optimization_engine == "aimnet2":
             opt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_aimnet2_optimization(
@@ -1011,7 +1159,7 @@ def run_protomer_solvation(
     charge_override: Optional[int] = None,
     solvent: Literal["water"] = "water",
     gfn: int = 2,
-    opt_level: Literal["loose", "tight", "vtight"] = "loose",
+    opt_level: str = "loose",
     sp_energy: Literal["gxtb", "xtb", "skala", "aimnet2"] = "gxtb",
     gxtb_post_optimize: bool = False,
     recompute_solvation: bool = False,
@@ -1126,18 +1274,18 @@ def run_protomer_solvation(
         def _sp_energy_from_gxtb() -> Optional[float]:
             if gxtb_post_optimize:
                 _progress("optimizing geometry with g-xTB")
-                run_gxtb_opt = _resolve_gxtb_optimization_runner(xtb_version)
-                gxtb_opt_xyz_path, value_kcal_mol, _ = run_gxtb_opt(
+                gxtb_opt_xyz_path, value_kcal_mol, _ = _run_gxtb_optimization_with_retry(
+                    protomer=protomer,
                     scratch_dir=scratch_dir,
-                    xyz_path=active_xyz_path,
+                    input_xyz_path=active_xyz_path,
                     input_mol=getattr(protomer, "input_mol", None),
                     xtb_executable=xtb_executable,
+                    xtb_version=xtb_version,
+                    opt_level=opt_level,
                     charge=charge,
                     timeout_s=timeout_s,
                     dry_run=dry_run,
                     log_paths=log_paths,
-                    run_command=_run,
-                    log_status=_log_status,
                 )
                 _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
                     protomer,

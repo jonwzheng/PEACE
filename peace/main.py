@@ -96,8 +96,17 @@ def _build_cli_parser():
         "--opt-level",
         type=str,
         default="loose",
-        choices=["loose", "tight", "vtight"],
-        help="Optimization level for xTB runs.",
+        choices=[
+            "crude",
+            "sloppy",
+            "loose",
+            "lax",
+            "normal",
+            "tight",
+            "vtight",
+            "extreme",
+        ],
+        help="Optimization convergence preset for xTB/g-xTB runs.",
     )
     p.add_argument(
         "--optimization-engine",
