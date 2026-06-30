@@ -61,7 +61,11 @@ def extract_matches_from_smarts_collection(query_mol: Mol, groups: list[Mol], si
     return matching_sites    
 
 def combine_images(imgs: list, buffer: int = 6, mode: str = "vertical") -> Image.Image:
-    """Stack images vertically or horizontally into one RGB canvas."""
+    """Stack images vertically or horizontally into one RGB canvas.
+    Adapted, and modified, from Greg Landrum's blog: 
+    https://greglandrum.github.io/rdkit-blog/posts/2023-05-26-drawing-options-explained.html
+    """
+
     if not imgs:
         raise ValueError("combine_images requires at least one image.")
 
@@ -104,8 +108,6 @@ def combine_images(imgs: list, buffer: int = 6, mode: str = "vertical") -> Image
 def show_images(imgs: list, buffer: int = 6, mode = "vertical", save_path=None):
     """ 
     Given a list of images, display or save one combined image.
-    Adapted, and modified, from Greg Landrum's blog: 
-    https://greglandrum.github.io/rdkit-blog/posts/2023-05-26-drawing-options-explained.html
     """
     if not imgs:
         return
