@@ -189,7 +189,7 @@ def _build_cli_parser():
         "--refine",
         action="store_true",
         help=(
-            "After the g-xTB solvation stage, re-evaluate solvation with ORCA openCOSMO-RS for "
+            "After the g-xTB calculation stage, re-evaluate solvation with ORCA openCOSMO-RS for "
             "low-lying protomers (requires ORCA on PATH). Implies workflows that completed with valid "
             "solution-phase energies; use with --solvation."
         ),
@@ -610,6 +610,9 @@ def _assign_screening_placeholder(
         placeholder_energy,
     )
     _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
+    from peace.solvation import promote_screening_xtb_terms_to_final
+
+    promote_screening_xtb_terms_to_final(protomer, clear_gas_sp=True)
     return placeholder_energy
 
 

@@ -684,6 +684,36 @@ def _persist_protomer_results(
     )
 
 
+def promote_screening_xtb_terms_to_final(
+    protomer: Protomer,
+    *,
+    clear_gas_sp: bool = False,
+) -> None:
+    """
+    Copy xTB screening solvation and RRHO terms onto final exported mol props.
+
+    Gas-phase SP is intentionally not promoted: final ``gas_sp_energy_kcal_mol`` is
+    reserved for the post-screen calculator (e.g. g-xTB).
+    """
+    mol = protomer.mol
+    if mol is None:
+        return
+    if mol.HasProp("screening_solvation_free_energy_kcal_mol"):
+        _set_mol_prop_double(
+            mol,
+            "solvation_free_energy_kcal_mol",
+            float(mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")),
+        )
+    if mol.HasProp("screening_rrho_contribution_kcal_mol"):
+        _set_mol_prop_double(
+            mol,
+            "rrho_contribution_kcal_mol",
+            float(mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")),
+        )
+    if clear_gas_sp and mol.HasProp("gas_sp_energy_kcal_mol"):
+        mol.ClearProp("gas_sp_energy_kcal_mol")
+
+
 def _preserve_output_files(
     scratch_dir: Path,
     *,
@@ -1236,10 +1266,27 @@ def run_protomer_solvation(
         )
         _set_mol_prop_str(protomer.mol, "workflow_error", str(e)[:4000] if protomer.mol is not None else str(e))
 
-        solvation_free_energy_kcal_mol = None
+        promote_screening_xtb_terms_to_final(protomer, clear_gas_sp=True)
         gas_sp_energy_kcal_mol = None
-        rrho_contribution_kcal_mol = None
         solution_phase_free_energy_kcal_mol = None
+        if protomer.mol is not None:
+            if protomer.mol.HasProp("solvation_free_energy_kcal_mol"):
+                solvation_free_energy_kcal_mol = float(
+                    protomer.mol.GetDoubleProp("solvation_free_energy_kcal_mol")
+                )
+            else:
+                solvation_free_energy_kcal_mol = None
+            if protomer.mol.HasProp("rrho_contribution_kcal_mol"):
+                rrho_contribution_kcal_mol = float(
+                    protomer.mol.GetDoubleProp("rrho_contribution_kcal_mol")
+                )
+            else:
+                rrho_contribution_kcal_mol = None
+            _set_mol_prop_double(protomer.mol, "conformer_energy_kcal_mol", conformer_energy_kcal_mol)
+            protomer.mol.SetProp("charge", str(charge))
+        else:
+            solvation_free_energy_kcal_mol = None
+            rrho_contribution_kcal_mol = None
 
         stdout_tail = str(e)
 
@@ -1256,9 +1303,9 @@ def run_protomer_solvation(
         return SolvationWorkflowResult(
             conformer_energy_kcal_mol=conformer_energy_kcal_mol,
             xtb_optimized_xyz=preserved_xtbopt_path if preserved_xtbopt_path is not None else opt_xyz_path,
-            solvation_free_energy_kcal_mol=None,
+            solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
             gas_sp_energy_kcal_mol=None,
-            rrho_contribution_kcal_mol=None,
+            rrho_contribution_kcal_mol=rrho_contribution_kcal_mol,
             solution_phase_free_energy_kcal_mol=None,
             stdout_tail=stdout_tail[-4000:],
         )
