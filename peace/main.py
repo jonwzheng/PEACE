@@ -1,4 +1,4 @@
-from peace.protomer import Protomer, Species, Tautomer
+from peace.protomer import Protomer, Species, SpeciesProtomerRegistry, Tautomer
 from peace.engine import ChargeEngine
 from peace.common import canon_smiles, show_images, protonate_at_site, deprotonate_at_site
 from peace import visualization
@@ -421,6 +421,14 @@ def _enumerate_species_protomers(
         smiles = taut.protomers[0].smiles if 0 in taut.protomers else "N/A"
         _log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)}: {smiles}")
 
+    registry = SpeciesProtomerRegistry()
+    pre_expansion_removed = registry.seed_from_species(spec)
+    if pre_expansion_removed:
+        _log(
+            f"Species protomer deduplication (pre-expansion): removed {pre_expansion_removed} "
+            f"duplicate(s); {registry.unique_count()} unique canonical protomer(s) remain"
+        )
+
     if site_search_mode == "none":
         _log("Skipping protomer enumeration (site-search-mode=none)")
         for taut_idx, taut in tautomer_items:
@@ -441,6 +449,7 @@ def _enumerate_species_protomers(
         return
 
     _log("Enumerating protomeric forms for each tautomer")
+
     for taut_idx, taut in tautomer_items:
         # Iterative protomer expansion:
         # each newly discovered protomer becomes a seed to discover additional
@@ -476,8 +485,8 @@ def _enumerate_species_protomers(
                 break
             round_idx += 1
             seed_protomer = seed_queue.pop(0)
-            seed_smiles = seed_protomer.smiles
-            if seed_smiles in processed_seed_smiles:
+            seed_smiles = canon_smiles(seed_protomer.smiles)
+            if seed_smiles is None or seed_smiles in processed_seed_smiles:
                 continue
             processed_seed_smiles.add(seed_smiles)
 
@@ -497,6 +506,8 @@ def _enumerate_species_protomers(
                 seed_protomer,
                 acid_sites,
                 basic_sites,
+                species_registry=registry,
+                tautomer_id=taut_idx,
             )
             seed_queue.extend(new_protomers)
 
@@ -505,6 +516,13 @@ def _enumerate_species_protomers(
         )
         for prot_idx, prot in taut.protomers.items():
             _log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)}: {prot.smiles}")
+
+    if registry.skipped_count:
+        unique_total = sum(len(taut.protomers) for _, taut in tautomer_items)
+        _log(
+            f"Species protomer deduplication: removed/skipped {registry.skipped_count} "
+            f"duplicate(s); {unique_total} unique canonical protomer(s) remain"
+        )
 
 
 def _seed_adjacent_charge_species(

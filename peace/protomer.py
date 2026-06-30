@@ -1,21 +1,124 @@
+from __future__ import annotations
+
 from rdkit.Chem import AllChem, Mol
 from .common import protonate_at_site, deprotonate_at_site, extract_matches_from_smarts_collection, canon_smiles
 
 import copy
 import itertools
 import warnings
+
 import numpy as np
 import pandas as pd
 
-class Protomer:
-    # TODO: This module should be compatible with any charge object.
 
+def _increment_degeneracy(protomer: "Protomer") -> int:
+    """Increment and return the degeneracy count on a protomer mol."""
+    if protomer.mol is None:
+        return 1
+    if protomer.mol.HasProp("degeneracy"):
+        new_count = int(protomer.mol.GetProp("degeneracy")) + 1
+    else:
+        new_count = 2
+    protomer.mol.SetIntProp("degeneracy", new_count)
+    return new_count
+
+
+def _sync_alternate_tautomer_ids_prop(protomer: "Protomer") -> None:
+    if protomer.mol is None or not protomer.alternate_tautomer_ids:
+        return
+    protomer.mol.SetProp(
+        "alternate_tautomer_ids",
+        ",".join(str(taut_id) for taut_id in sorted(set(protomer.alternate_tautomer_ids))),
+    )
+
+
+def _record_duplicate_skip(
+    canonical_protomer: "Protomer",
+    *,
+    skipped_tautomer_id: int,
+    canonical_tautomer_id: int,
+) -> int:
+    """Record alternate tautomer membership and bump degeneracy on the canonical protomer."""
+    if (
+        skipped_tautomer_id != canonical_tautomer_id
+        and skipped_tautomer_id not in canonical_protomer.alternate_tautomer_ids
+    ):
+        canonical_protomer.alternate_tautomer_ids.append(skipped_tautomer_id)
+        _sync_alternate_tautomer_ids_prop(canonical_protomer)
+    return _increment_degeneracy(canonical_protomer)
+
+
+class SpeciesProtomerRegistry:
+    """
+    Track canonical protomer representatives across all tautomers in a Species.
+    Supports tracking of duplicate protomers across a Species, which 
+    is useful for deduplication + keeping track of ion pairs.
+    """
+
+    def __init__(self) -> None:
+        self._canonical: dict[str, tuple[int, int, Protomer]] = {}
+        self.skipped_count = 0
+
+    def is_duplicate(self, smiles: str) -> bool:
+        canonical = canon_smiles(smiles)
+        return canonical is not None and canonical in self._canonical
+
+    def canonical_for(self, smiles: str) -> tuple[int, int, Protomer] | None:
+        canonical = canon_smiles(smiles)
+        if canonical is None:
+            return None
+        return self._canonical.get(canonical)
+
+    def register(self, tautomer_id: int, protomer_id: int, protomer: Protomer) -> None:
+        canonical = canon_smiles(protomer.smiles)
+        if canonical is None:
+            return
+        self._canonical[canonical] = (tautomer_id, protomer_id, protomer)
+
+    def seed_from_species(self, spec: "Species") -> int:
+        """Register existing protomers and remove cross-tautomer duplicates."""
+        removed = 0
+        for taut_idx in sorted(spec.tautomers.keys()):
+            taut = spec.tautomers[taut_idx]
+            for prot_idx in list(taut.protomers.keys()):
+                protomer = taut.protomers[prot_idx]
+                canonical = canon_smiles(protomer.smiles)
+                if canonical is None:
+                    continue
+                existing = self._canonical.get(canonical)
+                if existing is not None:
+                    canon_taut_idx, canon_prot_idx, canon_protomer = existing
+                    degeneracy = _record_duplicate_skip(
+                        canon_protomer,
+                        skipped_tautomer_id=taut_idx,
+                        canonical_tautomer_id=canon_taut_idx,
+                    )
+                    warnings.warn(
+                        f"Skipping duplicate protomer {protomer.smiles} under tautomer {taut_idx}; "
+                        f"canonical entry is tautomer {canon_taut_idx} protomer {canon_prot_idx} "
+                        f"(degeneracy={degeneracy})."
+                    )
+                    del taut.protomers[prot_idx]
+                    removed += 1
+                    self.skipped_count += 1
+                    continue
+                if protomer.mol is not None and not protomer.mol.HasProp("degeneracy"):
+                    protomer.mol.SetIntProp("degeneracy", 1)
+                self.register(taut_idx, prot_idx, protomer)
+        return removed
+
+    def unique_count(self) -> int:
+        return len(self._canonical)
+
+
+class Protomer:
     def __init__(self, smiles: str = "", mol: Mol = None):
         self.smiles = canon_smiles(smiles)
         self.mol = mol
         # Keep a copy of the pre-optimization/input molecular graph for display/export.
         self.input_mol = copy.deepcopy(mol) if mol is not None else None
         self.ionization_sites = []
+        self.alternate_tautomer_ids: list[int] = []
         self.is_zwitterion = self._is_zwitterion_mol(mol) if mol is not None else False
 
     def __repr__(self):
@@ -111,6 +214,9 @@ class Tautomer:
         seed_protomer: Protomer,
         acidic_sites: list[int],
         basic_sites: list[int],
+        *,
+        species_registry: SpeciesProtomerRegistry | None = None,
+        tautomer_id: int | None = None,
     ) -> list[Protomer]:
         """
         Enumerate protomers by applying one protonation/deprotonation pair to a
@@ -147,7 +253,11 @@ class Tautomer:
             # keep historical ionization-site highlights across iterative generations.
             prior_sites = seed_protomer.ionization_sites if seed_protomer.ionization_sites else []
             new_protomer.ionization_sites = list(dict.fromkeys(prior_sites + [basic_idx, acidic_idx]))
-            if self.embed_protomer(new_protomer):
+            if self.embed_protomer(
+                new_protomer,
+                species_registry=species_registry,
+                tautomer_id=tautomer_id,
+            ):
                 new_protomers.append(new_protomer)
         return new_protomers
 
@@ -173,7 +283,13 @@ class Tautomer:
         # TODO: assert number of N[H1,H2,H3]+ groups MINUS the  number of [X-] groups is equal to the overall charge.
         return protomer
 
-    def embed_protomer(self, protomer: Protomer) -> bool:
+    def embed_protomer(
+        self,
+        protomer: Protomer,
+        *,
+        species_registry: SpeciesProtomerRegistry | None = None,
+        tautomer_id: int | None = None,
+    ) -> bool:
         """
         Embeds a protomer to the Tautomer.
         Args:
@@ -183,26 +299,56 @@ class Tautomer:
             True if the protomer was added, False if it was not.
         """
         #TODO: check if generated protomers have same # of heavy atoms to base
+        canonical_smiles = canon_smiles(protomer.smiles)
+        if canonical_smiles is None:
+            return False
+
+        if species_registry is not None:
+            existing = species_registry.canonical_for(protomer.smiles)
+            if existing is not None:
+                canon_taut_idx, canon_prot_idx, canon_protomer = existing
+                skipped_tautomer_id = tautomer_id if tautomer_id is not None else -1
+                degeneracy = _record_duplicate_skip(
+                    canon_protomer,
+                    skipped_tautomer_id=skipped_tautomer_id,
+                    canonical_tautomer_id=canon_taut_idx,
+                )
+                species_registry.skipped_count += 1
+                if skipped_tautomer_id == canon_taut_idx:
+                    warnings.warn(
+                        f"Skipping duplicate protomer {protomer.smiles} within tautomer "
+                        f"{skipped_tautomer_id} (degeneracy={degeneracy})."
+                    )
+                else:
+                    warnings.warn(
+                        f"Skipping duplicate protomer {protomer.smiles} under tautomer "
+                        f"{skipped_tautomer_id}; canonical entry is tautomer {canon_taut_idx} "
+                        f"protomer {canon_prot_idx} (degeneracy={degeneracy})."
+                    )
+                return False
+
         idx = list(self.protomers.keys())[-1] + 1
 
-        # Check for isomorphic
+        # Check for isomorphic within this tautomer when no species registry is used.
         existing_smiles = [canon_smiles(p.smiles) for p in self.protomers.values()]
-        if any([canon_smiles(protomer.smiles) == x for x in existing_smiles]):
+        if any(canonical_smiles == x for x in existing_smiles):
             for existing_protomer in self.protomers.values():
-                if canon_smiles(existing_protomer.smiles) == canon_smiles(protomer.smiles):
-                    if existing_protomer.mol is not None:
-                        if existing_protomer.mol.HasProp("degeneracy"):
-                            existing_count = int(existing_protomer.mol.GetProp("degeneracy"))
-                        else:
-                            existing_count = 1
-                        existing_protomer.mol.SetIntProp("degeneracy", existing_count + 1)
+                if canon_smiles(existing_protomer.smiles) == canonical_smiles:
+                    degeneracy = _increment_degeneracy(existing_protomer)
+                    if tautomer_id is not None:
+                        warnings.warn(
+                            f"Skipping duplicate protomer {protomer.smiles} within tautomer "
+                            f"{tautomer_id} (degeneracy={degeneracy})."
+                        )
                     break
             return False
-        else:
-            if protomer.mol is not None:
-                protomer.mol.SetIntProp("degeneracy", 1)
-            self.protomers[idx] = protomer
-            return True
+
+        if protomer.mol is not None:
+            protomer.mol.SetIntProp("degeneracy", 1)
+        self.protomers[idx] = protomer
+        if species_registry is not None and tautomer_id is not None:
+            species_registry.register(tautomer_id, idx, protomer)
+        return True
 
 class Species:
     """
@@ -364,6 +510,7 @@ class Species:
             "workflow_error",
             "connectivity_mismatch",
             "degeneracy",
+            "alternate_tautomer_ids",
 #            "connectivity_mismatch_error",
         ]
         for taut_idx, tautomer in self.tautomers.items():
@@ -379,6 +526,13 @@ class Species:
                     for prop in solvation_props:
                         if protomer.mol.HasProp(prop):
                             row[prop] = protomer.mol.GetProp(prop)
+                if (
+                    "alternate_tautomer_ids" not in row
+                    and protomer.alternate_tautomer_ids
+                ):
+                    row["alternate_tautomer_ids"] = ",".join(
+                        str(taut_id) for taut_id in sorted(set(protomer.alternate_tautomer_ids))
+                    )
                 rows.append(row)
 
         return pd.DataFrame(rows)
