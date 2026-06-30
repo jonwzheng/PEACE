@@ -257,7 +257,7 @@ def _search_conformers_rdkit_mmff94(
     params.useExpTorsionAnglePrefs = False # better for liq. phase
 
     n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
-    n_confs = min(50, 2 ** n_rotatable_bonds, 300) 
+    n_confs = min(50, 2 ** n_rotatable_bonds, 500) 
     if max_conformers is not None:
         n_confs = min(int(n_confs), int(max_conformers))
     conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
