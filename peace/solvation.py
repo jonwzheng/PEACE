@@ -213,10 +213,37 @@ def _embed_conformers_rdkit_mmff94(
     random_seed: int = 42,
     mmff_max_iters: int = 1000,
 ) -> tuple[Chem.Mol, float, int]:
-    """
-    Generate conformers with RDKit ETKDG and optimize with MMFF94.
+    """Backward-compatible wrapper around :func:`_search_conformers_rdkit_mmff94`."""
+    result = _search_conformers_rdkit_mmff94(
+        mol,
+        random_seed=random_seed,
+        mmff_max_iters=mmff_max_iters,
+    )
+    return result.mol, result.best_energy_kcal_mol, result.best_conf_id
 
-    Returns: (mol_no_h, best_energy_kcal_mol, best_conf_id)
+
+@dataclass(frozen=True)
+class ConformerSearchResult:
+    """Single-protomer conformer search output (extensible to multi-conformer ensembles)."""
+
+    mol: Chem.Mol
+    best_energy_kcal_mol: float
+    best_conf_id: int
+    conformer_energies_kcal_mol: dict[int, float]
+
+
+def _search_conformers_rdkit_mmff94(
+    mol: Chem.Mol,
+    *,
+    random_seed: int = 42,
+    mmff_max_iters: int = 1000,
+    max_conformers: Optional[int] = None,
+) -> ConformerSearchResult:
+    """
+    Generate conformers with RDKit ETKDG and rank by MMFF94 energy.
+
+    Returns the lowest-MMFF-energy structure plus per-conformer energies for
+    optional downstream ensemble averaging.
     """
     if mol is None:
         raise ValueError("mol is None")
@@ -224,22 +251,23 @@ def _embed_conformers_rdkit_mmff94(
     mol_in = Chem.Mol(mol)
     mol_h = Chem.AddHs(mol_in, addCoords=False)
 
-    # KDGv3 minus ET
     params = AllChem.ETKDGv3()
     params.randomSeed = int(random_seed)
     params.numThreads = 0
-    params.useExpTorsionAnglePrefs = False # better for liquid phase
+    params.useExpTorsionAnglePrefs = False # better for liq. phase
 
     n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
-    n_confs = min(100, 2 ** n_rotatable_bonds, 2000)
+    n_confs = min(50, 2 ** n_rotatable_bonds, 300) 
+    if max_conformers is not None:
+        n_confs = min(int(n_confs), int(max_conformers))
     conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
     if not conf_ids:
         raise RuntimeError("RDKit conformer embedding produced no conformers.")
 
     best_energy = float("inf")
     best_conf_id = conf_ids[0]
+    conformer_energies: dict[int, float] = {}
 
-    # optimize confs
     for conf_id in conf_ids:
         status = AllChem.MMFFOptimizeMolecule(
             mol_h,
@@ -248,27 +276,137 @@ def _embed_conformers_rdkit_mmff94(
             confId=int(conf_id),
         )
         if status == -1:
-            # Force field setup failed for this conformer. Skip it.
             continue
 
-        # Compute MMFF energy for selection (lowest MMFF energy).
         mmff_props = AllChem.MMFFGetMoleculeProperties(mol_h, mmffVariant="MMFF94")
         if mmff_props is None:
             raise RuntimeError("MMFF94 molecule properties could not be created.")
         ff = AllChem.MMFFGetMoleculeForceField(mol_h, mmff_props, confId=int(conf_id))
         ff.Initialize()
         energy = float(ff.CalcEnergy())
+        conformer_energies[int(conf_id)] = energy
         if energy < best_energy:
             best_energy = energy
             best_conf_id = int(conf_id)
 
-    # Drop explicit Hs for storage; keep best heavy-atom coordinates.
+    if not conformer_energies:
+        raise RuntimeError("MMFF94 optimization failed for all embedded conformers.")
+
     mol_best_h = Chem.Mol(mol_h)
     mol_best_h.RemoveAllConformers()
     mol_best_h.AddConformer(mol_h.GetConformer(best_conf_id), assignId=True)
     mol_no_h = Chem.RemoveHs(mol_best_h)
 
-    return mol_no_h, best_energy, best_conf_id
+    return ConformerSearchResult(
+        mol=mol_no_h,
+        best_energy_kcal_mol=best_energy,
+        best_conf_id=best_conf_id,
+        conformer_energies_kcal_mol=conformer_energies,
+    )
+
+
+ProtomerRef = tuple[int, int, Protomer]
+ProtomerEnergyRecord = tuple[int, int, Protomer, Optional[float], Optional[float]]
+
+
+def run_batch_conformer_generation(
+    protomer_refs: list[ProtomerRef],
+    *,
+    conformer_mode: Literal["mmff94", "external_xyz", "skip_search"],
+    external_xyz_path: Optional[str | Path] = None,
+    scratch_root: str | Path = "./scratch_conformers",
+    random_seed: int = 42,
+    dry_run: bool = False,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> None:
+    """
+    Generate or attach 3D conformers for all protomers in one upfront step.
+
+    Writes geometries onto each protomer.mol before any xTB/QM workflows run.
+    """
+    def _progress(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
+    scratch_root_path = Path(scratch_root)
+    scratch_root_path.mkdir(parents=True, exist_ok=True)
+    log_paths = [_species_workflow_log_path(scratch_root_path)]
+    _log_status(log_paths, "START", f"batch conformer generation mode={conformer_mode} n_protomers={len(protomer_refs)}")
+
+    if dry_run:
+        _log_status(log_paths, "SKIP", "dry_run enabled; skipping batch conformer generation")
+        return
+
+    for taut_idx, prot_idx, protomer in protomer_refs:
+        prefix = f"tautomer {taut_idx} protomer {prot_idx}"
+        _progress(f"preparing conformer for {prefix}")
+        try:
+            mol, conformer_energy_kcal_mol = _prepare_protomer_conformer(
+                protomer,
+                conformer_mode=conformer_mode,
+                external_xyz_path=external_xyz_path,
+                log_paths=log_paths,
+                random_seed=random_seed,
+            )
+            _set_mol_prop_double(protomer.mol, "conformer_energy_kcal_mol", conformer_energy_kcal_mol)
+            _log_status(
+                log_paths,
+                "OK",
+                f"{prefix} conformer ready energy_kcal_mol={conformer_energy_kcal_mol}",
+            )
+        except Exception as exc:
+            _log_status(log_paths, "FAIL", f"{prefix} conformer generation failed: {exc}")
+            _set_mol_prop_str(protomer.mol, "conformer_generation_error", str(exc)[:4000])
+            if protomer.mol is not None:
+                protomer.mol.SetProp("workflow_status", "conformer_generation_failed")
+
+    _log_status(log_paths, "DONE", "batch conformer generation finished")
+
+
+def partition_protomers_by_conformer_energy(
+    protomer_refs: list[ProtomerRef],
+    *,
+    threshold_kcal_mol: float,
+) -> tuple[list[ProtomerRef], list[ProtomerEnergyRecord]]:
+    """
+    Split protomers using MMFF94 conformer energy relative to the species minimum.
+
+    Protomers above ``threshold_kcal_mol`` are returned in the screened-out list with
+    their conformer energy and delta stored on protomer.mol.
+    """
+    records: list[ProtomerEnergyRecord] = []
+    for taut_idx, prot_idx, protomer in protomer_refs:
+        energy: Optional[float] = None
+        if protomer.mol is not None and protomer.mol.HasProp("conformer_energy_kcal_mol"):
+            try:
+                energy = float(protomer.mol.GetProp("conformer_energy_kcal_mol"))
+            except ValueError:
+                energy = None
+        records.append((taut_idx, prot_idx, protomer, energy, None))
+
+    valid_energies = [row[3] for row in records if row[3] is not None]
+    min_energy = min(valid_energies) if valid_energies else None
+
+    annotated: list[ProtomerEnergyRecord] = []
+    for taut_idx, prot_idx, protomer, energy, _ in records:
+        delta = (energy - min_energy) if energy is not None and min_energy is not None else None
+        if protomer.mol is not None:
+            _set_mol_prop_double(protomer.mol, "conformer_energy_kcal_mol", energy)
+            _set_mol_prop_double(protomer.mol, "conformer_delta_kcal_mol", delta)
+        annotated.append((taut_idx, prot_idx, protomer, energy, delta))
+
+    if min_energy is None:
+        return list(protomer_refs), []
+
+    kept: list[ProtomerRef] = []
+    screened_out: list[ProtomerEnergyRecord] = []
+    for taut_idx, prot_idx, protomer, energy, delta in annotated:
+        if delta is not None and delta > float(threshold_kcal_mol):
+            screened_out.append((taut_idx, prot_idx, protomer, energy, delta))
+        else:
+            kept.append((taut_idx, prot_idx, protomer))
+
+    return kept, screened_out
 
 
 def _mol_to_xyz_block(mol: Chem.Mol, *, conf_id: int = 0) -> str:
@@ -348,6 +486,7 @@ def _prepare_protomer_conformer(
     conformer_mode: Literal["mmff94", "external_xyz", "skip_search"],
     external_xyz_path: Optional[str | Path],
     log_paths: list[Path],
+    random_seed: int = 42,
 ) -> tuple[Chem.Mol, Optional[float]]:
     mol = protomer.mol
     if mol is None:
@@ -359,14 +498,18 @@ def _prepare_protomer_conformer(
     conformer_energy_kcal_mol: Optional[float] = None
 
     if conformer_mode == "mmff94":
-        mol_best, best_energy, best_conf_id = _embed_conformers_rdkit_mmff94(mol)
-        conformer_energy_kcal_mol = best_energy
-        protomer.mol = mol_best
+        search = _search_conformers_rdkit_mmff94(mol, random_seed=random_seed)
+        conformer_energy_kcal_mol = search.best_energy_kcal_mol
+        protomer.mol = search.mol
         protomer.mol.SetProp("conformer_mode", "mmff94")
+        protomer.mol.SetIntProp("conformer_count", len(search.conformer_energies_kcal_mol))
         _log_status(
             log_paths,
             "OK",
-            f"rdkit conformer search complete best_conf_id={best_conf_id} best_energy_kcal_mol={best_energy}",
+            "rdkit conformer search complete "
+            f"best_conf_id={search.best_conf_id} "
+            f"best_energy_kcal_mol={search.best_energy_kcal_mol} "
+            f"n_conformers={len(search.conformer_energies_kcal_mol)}",
         )
         return protomer.mol, conformer_energy_kcal_mol
 

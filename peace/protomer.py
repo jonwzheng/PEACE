@@ -346,6 +346,8 @@ class Species:
         rows = []
         solvation_props = [
             "conformer_energy_kcal_mol",
+            "conformer_delta_kcal_mol",
+            "conformer_placeholder_solution_phase_free_energy_kcal_mol",
             "solvation_free_energy_kcal_mol",
             "solvation_free_energy_cpcmx_kcal_mol",
             "solvation_free_energy_cosmors_kcal_mol",
