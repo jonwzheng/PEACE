@@ -437,6 +437,14 @@ def _enumerate_species_protomers(
             f"Species protomer deduplication (pre-expansion): removed {pre_expansion_removed} "
             f"duplicate(s); {registry.unique_count()} unique canonical protomer(s) remain"
         )
+    removed_empty_tautomers = spec.drop_empty_tautomers()
+    if removed_empty_tautomers:
+        _log(
+            "Species protomer deduplication: dropped "
+            f"{len(removed_empty_tautomers)} tautomer(s) with no unique protomers: "
+            f"{removed_empty_tautomers}"
+        )
+    tautomer_items = list(spec.tautomers.items())
 
     if site_search_mode == "none":
         _log("Skipping protomer enumeration (site-search-mode=none)")
@@ -463,7 +471,13 @@ def _enumerate_species_protomers(
         # Iterative protomer expansion:
         # each newly discovered protomer becomes a seed to discover additional
         # protonation/deprotonation combinations (supports multi-zwitterions).
-        reference_protomer = taut.protomers[0]
+        reference_protomer = taut.reference_protomer()
+        if reference_protomer is None:
+            _log(
+                f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} skipped: "
+                "no unique protomers after deduplication"
+            )
+            continue
         n_ionizable_groups = _count_ionizable_groups(
             reference_protomer,
             engine=engine,

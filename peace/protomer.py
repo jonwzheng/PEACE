@@ -185,6 +185,12 @@ class Tautomer:
     def from_mol(cls, mol: Mol):
         return cls(Protomer.from_mol(mol))
 
+    def reference_protomer(self) -> Protomer | None:
+        """Return the lowest-index protomer, or None when the tautomer is empty."""
+        if not self.protomers:
+            return None
+        return self.protomers[min(self.protomers.keys())]
+
     def find_ionization_sites(
         self,
         query_substructs: list[Mol],
@@ -372,7 +378,16 @@ class Species:
     def embed_tautomer(self, taut: Tautomer):
         # TODO: check that the number of atoms is same as the reference tautomer
         idx = list(self.tautomers.keys())[-1] + 1
-        self.tautomers[idx] = taut        
+        self.tautomers[idx] = taut
+
+    def drop_empty_tautomers(self) -> list[int]:
+        """Remove tautomers with no protomers after deduplication."""
+        removed: list[int] = []
+        for taut_idx in list(self.tautomers.keys()):
+            if not self.tautomers[taut_idx].protomers:
+                removed.append(taut_idx)
+                del self.tautomers[taut_idx]
+        return removed
     
     def get_all_smiles(self):
         smiles = []
