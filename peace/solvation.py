@@ -25,7 +25,7 @@ from .calculators import (
     run_skala_single_point_energy,
     run_xtb_optimization,
 )
-from .calculators.common import looser_opt_convergence_level
+from .calculators.common import opt_convergence_retry_levels
 from .protomer import Protomer, Species, Tautomer
 
 HARTREE_TO_KCAL_MOL = 627.5094740631
@@ -62,16 +62,176 @@ def _mark_relaxed_optimization(
     initial_opt_level: str,
     engine: str,
 ) -> None:
+    _set_optimization_convergence_props(
+        protomer,
+        opt_level=retried_opt_level,
+        initial_opt_level=initial_opt_level,
+        engine=engine,
+        relaxed_retry=True,
+    )
+
+
+def _set_optimization_convergence_props(
+    protomer: Protomer,
+    *,
+    opt_level: str,
+    initial_opt_level: str,
+    engine: str,
+    relaxed_retry: bool = False,
+) -> None:
     if protomer.mol is None:
         return
-    _set_mol_prop_str(
-        protomer.mol,
-        "workflow_status",
-        f"{_RELAXED_OPT_WORKFLOW_STATUS_PREFIX}{retried_opt_level}",
-    )
-    _set_mol_prop_str(protomer.mol, "optimization_opt_level", retried_opt_level)
+    _set_mol_prop_str(protomer.mol, "optimization_opt_level", opt_level)
     _set_mol_prop_str(protomer.mol, "optimization_initial_opt_level", initial_opt_level)
     _set_mol_prop_str(protomer.mol, "optimization_engine", engine)
+    if relaxed_retry:
+        _set_mol_prop_str(
+            protomer.mol,
+            "workflow_status",
+            f"{_RELAXED_OPT_WORKFLOW_STATUS_PREFIX}{opt_level}",
+        )
+
+
+def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
+    """
+    Return all-atom connectivity as undirected atom-index pairs.
+    Used to check whether an opt. geom matches input geom.
+    """
+    edges: set[tuple[int, int]] = set()
+    if mol is None:
+        return edges
+    for bond in mol.GetBonds():
+        begin = bond.GetBeginAtom()
+        end = bond.GetEndAtom()
+        i, j = begin.GetIdx(), end.GetIdx()
+        edges.add((min(i, j), max(i, j)))
+    return edges
+
+
+def _has_connectivity_mismatch(protomer: Protomer, xyz_path: Path) -> bool:
+    mol_opt = Chem.MolFromXYZFile(str(xyz_path))
+    if mol_opt is None or mol_opt.GetNumConformers() == 0:
+        return False
+    rdDetermineBonds.DetermineConnectivity(mol_opt)
+    input_mol = protomer.input_mol if getattr(protomer, "input_mol", None) is not None else protomer.mol
+    if input_mol is None:
+        return False
+    input_mol_with_hydrogens = Chem.AddHs(input_mol)
+    input_edges = _all_atom_connectivity_signature(input_mol_with_hydrogens)
+    opt_edges = _all_atom_connectivity_signature(mol_opt)
+    return input_edges != opt_edges
+
+
+def _clear_connectivity_mismatch_flags(protomer: Protomer) -> None:
+    if protomer.mol is None:
+        return
+    for key in ("connectivity_mismatch", "connectivity_mismatch_error"):
+        if protomer.mol.HasProp(key):
+            protomer.mol.ClearProp(key)
+
+
+def _report_optimization_event(
+    log_paths: list[Path],
+    *,
+    status: str,
+    message: str,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> None:
+    _log_status(log_paths, status, message)
+    if progress_callback is not None:
+        progress_callback(message)
+
+
+def _run_optimization_with_convergence_retry(
+    *,
+    protomer: Protomer,
+    scratch_dir: Path,
+    opt_level: str,
+    engine: str,
+    log_paths: list[Path],
+    run_at_level: Callable[[str], tuple[Path, Optional[float], Optional[float]]],
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> tuple[Path, Optional[float], Optional[float]]:
+    levels = opt_convergence_retry_levels(opt_level)
+
+    for attempt_idx, level in enumerate(levels):
+        if attempt_idx > 0:
+            _reset_optimization_artifacts(scratch_dir)
+            _clear_connectivity_mismatch_flags(protomer)
+
+        try:
+            result = run_at_level(level)
+        except (RuntimeError, FileNotFoundError) as exc:
+            if attempt_idx < len(levels) - 1:
+                next_level = levels[attempt_idx + 1]
+                summary = (
+                    f"{engine} optimization failed at convergence={level}; "
+                    f"retrying from initial geometry with convergence={next_level}"
+                )
+                _log_status(log_paths, "WARN", f"{summary}: {exc}")
+                if progress_callback is not None:
+                    progress_callback(summary)
+                continue
+            raise
+
+        opt_xyz_path, *_ = result
+        if _has_connectivity_mismatch(protomer, opt_xyz_path):
+            if attempt_idx < len(levels) - 1:
+                next_level = levels[attempt_idx + 1]
+                _report_optimization_event(
+                    log_paths,
+                    status="WARN",
+                    message=(
+                        f"{engine} optimization connectivity mismatch at convergence={level}; "
+                        f"retrying from initial geometry with convergence={next_level}"
+                    ),
+                    progress_callback=progress_callback,
+                )
+                continue
+            if attempt_idx > 0:
+                _mark_relaxed_optimization(
+                    protomer,
+                    retried_opt_level=level,
+                    initial_opt_level=opt_level,
+                    engine=engine,
+                )
+                _report_optimization_event(
+                    log_paths,
+                    status="WARN",
+                    message=(
+                        f"{engine} optimization still has connectivity mismatch after "
+                        f"relaxed retry at convergence={level} (initial={opt_level})"
+                    ),
+                    progress_callback=progress_callback,
+                )
+            return result
+
+        if attempt_idx > 0:
+            _mark_relaxed_optimization(
+                protomer,
+                retried_opt_level=level,
+                initial_opt_level=opt_level,
+                engine=engine,
+            )
+            _report_optimization_event(
+                log_paths,
+                status="OK",
+                message=(
+                    f"{engine} optimization succeeded with relaxed convergence={level} "
+                    f"(initial={opt_level})"
+                ),
+                progress_callback=progress_callback,
+            )
+        else:
+            _set_optimization_convergence_props(
+                protomer,
+                opt_level=level,
+                initial_opt_level=opt_level,
+                engine=engine,
+            )
+        return result
+
+    raise RuntimeError(f"{engine} optimization failed")
 
 
 def _run_xtb_optimization_with_retry(
@@ -87,14 +247,21 @@ def _run_xtb_optimization_with_retry(
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> tuple[Path, Optional[float], Optional[float]]:
-    try:
-        return run_xtb_optimization(
+    return _run_optimization_with_convergence_retry(
+        protomer=protomer,
+        scratch_dir=scratch_dir,
+        opt_level=opt_level,
+        engine="xtb",
+        log_paths=log_paths,
+        progress_callback=progress_callback,
+        run_at_level=lambda level: run_xtb_optimization(
             mol=mol,
             scratch_dir=scratch_dir,
             input_xyz_path=input_xyz_path,
             xtb_executable=xtb_executable,
-            opt_level=opt_level,
+            opt_level=level,
             charge=charge,
             solvent=solvent,
             timeout_s=timeout_s,
@@ -102,40 +269,8 @@ def _run_xtb_optimization_with_retry(
             log_paths=log_paths,
             run_command=_run,
             log_status=_log_status,
-        )
-    except (RuntimeError, FileNotFoundError) as exc:
-        looser_level = looser_opt_convergence_level(opt_level)
-        if looser_level is None:
-            raise
-        _log_status(
-            log_paths,
-            "WARN",
-            "xTB optimization failed at "
-            f"convergence={opt_level}; retrying from initial geometry with "
-            f"convergence={looser_level}: {exc}",
-        )
-        _reset_optimization_artifacts(scratch_dir)
-        result = run_xtb_optimization(
-            mol=mol,
-            scratch_dir=scratch_dir,
-            input_xyz_path=input_xyz_path,
-            xtb_executable=xtb_executable,
-            opt_level=looser_level,
-            charge=charge,
-            solvent=solvent,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-            run_command=_run,
-            log_status=_log_status,
-        )
-        _mark_relaxed_optimization(
-            protomer,
-            retried_opt_level=looser_level,
-            initial_opt_level=opt_level,
-            engine="xtb",
-        )
-        return result
+        ),
+    )
 
 
 def _run_gxtb_optimization_with_retry(
@@ -151,46 +286,36 @@ def _run_gxtb_optimization_with_retry(
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> tuple[Path, Optional[float], Optional[float]]:
     run_gxtb_opt = _resolve_gxtb_optimization_runner(xtb_version)
-    opt_kwargs = dict(
-        scratch_dir=scratch_dir,
-        xyz_path=input_xyz_path,
-        xtb_executable=xtb_executable,
-        opt_level=opt_level,
-        charge=charge,
-        timeout_s=timeout_s,
-        dry_run=dry_run,
-        log_paths=log_paths,
-        run_command=_run,
-        log_status=_log_status,
-    )
-    if xtb_version == "default":
-        opt_kwargs["input_mol"] = input_mol
 
-    try:
+    def _run_at_level(level: str) -> tuple[Path, Optional[float], Optional[float]]:
+        opt_kwargs = dict(
+            scratch_dir=scratch_dir,
+            xyz_path=input_xyz_path,
+            xtb_executable=xtb_executable,
+            opt_level=level,
+            charge=charge,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
+        )
+        if xtb_version == "default":
+            opt_kwargs["input_mol"] = input_mol
         return run_gxtb_opt(**opt_kwargs)
-    except (RuntimeError, FileNotFoundError) as exc:
-        looser_level = looser_opt_convergence_level(opt_level)
-        if looser_level is None:
-            raise
-        _log_status(
-            log_paths,
-            "WARN",
-            "g-xTB optimization failed at "
-            f"convergence={opt_level}; retrying from initial geometry with "
-            f"convergence={looser_level}: {exc}",
-        )
-        _reset_optimization_artifacts(scratch_dir)
-        opt_kwargs["opt_level"] = looser_level
-        result = run_gxtb_opt(**opt_kwargs)
-        _mark_relaxed_optimization(
-            protomer,
-            retried_opt_level=looser_level,
-            initial_opt_level=opt_level,
-            engine="gxtb",
-        )
-        return result
+
+    return _run_optimization_with_convergence_retry(
+        protomer=protomer,
+        scratch_dir=scratch_dir,
+        opt_level=opt_level,
+        engine="gxtb",
+        log_paths=log_paths,
+        progress_callback=progress_callback,
+        run_at_level=_run_at_level,
+    )
 
 def _append_log(log_path: Path, message: str) -> None:
     timestamp = datetime.now().isoformat(timespec="seconds")
@@ -697,22 +822,6 @@ def _write_workflow_inputs(mol: Chem.Mol, scratch_dir: Path, charge: int, log_pa
     return input_xyz_path
 
 
-def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
-    """
-    Return all-atom connectivity as undirected atom-index pairs.
-    Used to check whether an opt. geom matches input geom.
-    """
-    edges: set[tuple[int, int]] = set()
-    if mol is None:
-        return edges
-    for bond in mol.GetBonds():
-        begin = bond.GetBeginAtom()
-        end = bond.GetEndAtom()
-        i, j = begin.GetIdx(), end.GetIdx()
-        edges.add((min(i, j), max(i, j)))
-    return edges
-
-
 def _update_protomer_geometry_from_xyz(
     protomer: Protomer,
     xyz_path: Path,
@@ -724,14 +833,11 @@ def _update_protomer_geometry_from_xyz(
     if mol_opt is not None and mol_opt.GetNumConformers() > 0:
         rdDetermineBonds.DetermineConnectivity(mol_opt)
 
-        # sanity check: optimized connectivity should match input connectivity.
-        input_mol = protomer.input_mol if getattr(protomer, "input_mol", None) is not None else protomer.mol
-        # make a copy of the input mol that has explicit Hydrogens
-        input_mol_with_hydrogens = Chem.AddHs(input_mol)
-        
-        input_edges = _all_atom_connectivity_signature(input_mol_with_hydrogens)
-        opt_edges = _all_atom_connectivity_signature(mol_opt)
-        if input_edges != opt_edges:
+        if _has_connectivity_mismatch(protomer, xyz_path):
+            input_mol = protomer.input_mol if getattr(protomer, "input_mol", None) is not None else protomer.mol
+            input_mol_with_hydrogens = Chem.AddHs(input_mol)
+            input_edges = _all_atom_connectivity_signature(input_mol_with_hydrogens)
+            opt_edges = _all_atom_connectivity_signature(mol_opt)
             mol_opt.SetProp("connectivity_mismatch", "true")
             mol_opt.SetProp(
                 "connectivity_mismatch_error",
@@ -760,10 +866,25 @@ def _update_protomer_geometry_from_xyz(
                 )
             # fallback: keep pre-optimization graph/geometry attached to protomer.
             return xyz_path.read_text(), True
-        else:
-            mol_opt.SetProp("connectivity_mismatch", "false")
-            if protomer.mol is not None:
-                protomer.mol.SetProp("connectivity_mismatch", "false")
+        mol_opt.SetProp("connectivity_mismatch", "false")
+        if protomer.mol is not None:
+            protomer.mol.SetProp("connectivity_mismatch", "false")
+        previous_mol = protomer.mol
+        if previous_mol is not None:
+            for key in ("conformer_energy_kcal_mol", "conformer_delta_kcal_mol", "gas_sp_energy_xtb_kcal_mol"):
+                if previous_mol.HasProp(key):
+                    try:
+                        mol_opt.SetDoubleProp(key, float(previous_mol.GetDoubleProp(key)))
+                    except (ValueError, KeyError, TypeError):
+                        mol_opt.SetProp(key, previous_mol.GetProp(key))
+            for key in (
+                "optimization_opt_level",
+                "optimization_initial_opt_level",
+                "optimization_engine",
+                "workflow_status",
+            ):
+                if previous_mol.HasProp(key):
+                    mol_opt.SetProp(key, previous_mol.GetProp(key))
         protomer.mol = mol_opt
         _log_status(log_paths, "OK", f"updated protomer geometry from {xyz_path.name}")
         return xyz_path.read_text(), False
@@ -814,6 +935,7 @@ def _persist_protomer_results(
     conformer_energy_kcal_mol: Optional[float],
     solvation_free_energy_kcal_mol: Optional[float],
     gas_sp_energy_kcal_mol: Optional[float],
+    gas_sp_energy_xtb_kcal_mol: Optional[float],
     rrho_contribution_kcal_mol: Optional[float],
     solution_phase_free_energy_kcal_mol: Optional[float],
 ) -> None:
@@ -821,6 +943,7 @@ def _persist_protomer_results(
     _set_mol_prop_double(protomer.mol, "conformer_energy_kcal_mol", conformer_energy_kcal_mol)
     _set_mol_prop_double(protomer.mol, "solvation_free_energy_kcal_mol", solvation_free_energy_kcal_mol)
     _set_mol_prop_double(protomer.mol, "gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
+    _set_mol_prop_double(protomer.mol, "gas_sp_energy_xtb_kcal_mol", gas_sp_energy_xtb_kcal_mol)
     _set_mol_prop_double(
         protomer.mol,
         "rrho_contribution_kcal_mol",
@@ -858,6 +981,12 @@ def promote_screening_xtb_terms_to_final(
             mol,
             "rrho_contribution_kcal_mol",
             float(mol.GetDoubleProp("screening_rrho_contribution_kcal_mol")),
+        )
+    if mol.HasProp("screening_gas_sp_energy_kcal_mol"):
+        _set_mol_prop_double(
+            mol,
+            "gas_sp_energy_xtb_kcal_mol",
+            float(mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")),
         )
     if clear_gas_sp and mol.HasProp("gas_sp_energy_kcal_mol"):
         mol.ClearProp("gas_sp_energy_kcal_mol")
@@ -1021,6 +1150,7 @@ def run_protomer_screening(
                 timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
+                progress_callback=_progress,
             )
         elif optimization_engine == "aimnet2":
             opt_xyz_path, _opt_gas_sp_kcal_mol, _opt_gas_sp_h = run_aimnet2_optimization(
@@ -1085,6 +1215,7 @@ def run_protomer_screening(
         _set_mol_prop_double(protomer.mol, "screening_conformer_energy_kcal_mol", conformer_energy_kcal_mol)
         _set_mol_prop_double(protomer.mol, "screening_solvation_free_energy_kcal_mol", solvation_free_energy_kcal_mol)
         _set_mol_prop_double(protomer.mol, "screening_gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
+        _set_mol_prop_double(protomer.mol, "gas_sp_energy_xtb_kcal_mol", gas_sp_energy_kcal_mol)
         _set_mol_prop_double(protomer.mol, "screening_rrho_contribution_kcal_mol", rrho_contribution_kcal_mol)
         _set_mol_prop_double(protomer.mol, "screening_solution_phase_free_energy_kcal_mol", solution_phase_free_energy_kcal_mol)
         _progress("finished screening workflow")
@@ -1204,6 +1335,7 @@ def run_protomer_solvation(
     opt_xyz_path: Optional[Path] = None
     solvation_free_energy_kcal_mol: Optional[float] = None
     gas_sp_energy_kcal_mol: Optional[float] = None
+    gas_sp_energy_xtb_kcal_mol: Optional[float] = None
     rrho_contribution_kcal_mol: Optional[float] = None
     solution_phase_free_energy_kcal_mol: Optional[float] = None
 
@@ -1247,6 +1379,15 @@ def run_protomer_solvation(
                 protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
                 if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol") else gas_sp_energy_kcal_mol
             )
+            gas_sp_energy_xtb_kcal_mol = (
+                protomer.mol.GetDoubleProp("gas_sp_energy_xtb_kcal_mol")
+                if protomer.mol.HasProp("gas_sp_energy_xtb_kcal_mol")
+                else (
+                    protomer.mol.GetDoubleProp("screening_gas_sp_energy_kcal_mol")
+                    if protomer.mol.HasProp("screening_gas_sp_energy_kcal_mol")
+                    else gas_sp_energy_xtb_kcal_mol
+                )
+            )
             solvation_free_energy_kcal_mol = (
                 protomer.mol.GetDoubleProp("screening_solvation_free_energy_kcal_mol")
                 if protomer.mol.HasProp("screening_solvation_free_energy_kcal_mol") else solvation_free_energy_kcal_mol
@@ -1286,6 +1427,7 @@ def run_protomer_solvation(
                     timeout_s=timeout_s,
                     dry_run=dry_run,
                     log_paths=log_paths,
+                    progress_callback=_progress,
                 )
                 _, has_connectivity_mismatch = _update_protomer_geometry_from_xyz(
                     protomer,
@@ -1383,7 +1525,7 @@ def run_protomer_solvation(
         # compute RRHO term if requested
         if recompute_frequencies or rrho_contribution_kcal_mol is None:
             _progress("computing RRHO contribution w/ frequency (xTB)")
-            gas_sp_energy_kcal_mol, rrho_contribution_kcal_mol, _gas_sp_energy_h = run_hessian_and_parse_energies(
+            gas_from_xtb_hessian, rrho_contribution_kcal_mol, _gas_sp_energy_h = run_hessian_and_parse_energies(
                 scratch_dir=scratch_dir,
                 xyz_path=active_xyz_path,
                 xtb_executable=xtb_executable,
@@ -1395,6 +1537,9 @@ def run_protomer_solvation(
                 run_command=_run,
                 log_status=_log_status,
             )
+            gas_sp_energy_xtb_kcal_mol = gas_from_xtb_hessian
+            if sp_energy == "xtb":
+                gas_sp_energy_kcal_mol = gas_from_xtb_hessian
 
         # compute solution-phase free energy by adding everything together
         solution_phase_free_energy_kcal_mol = _compute_solution_phase_energy(
@@ -1458,12 +1603,16 @@ def run_protomer_solvation(
             stdout_tail=stdout_tail[-4000:],
         )
 
+    if gas_sp_energy_xtb_kcal_mol is None and sp_energy == "xtb":
+        gas_sp_energy_xtb_kcal_mol = gas_sp_energy_kcal_mol
+
     _persist_protomer_results(
         protomer,
         charge=charge,
         conformer_energy_kcal_mol=conformer_energy_kcal_mol,
         solvation_free_energy_kcal_mol=solvation_free_energy_kcal_mol,
         gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
+        gas_sp_energy_xtb_kcal_mol=gas_sp_energy_xtb_kcal_mol,
         rrho_contribution_kcal_mol=rrho_contribution_kcal_mol,
         solution_phase_free_energy_kcal_mol=solution_phase_free_energy_kcal_mol,
     )

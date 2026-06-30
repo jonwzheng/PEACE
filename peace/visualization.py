@@ -499,7 +499,7 @@ def _panel_title(
     if not entries:
         return None
     first = entries[0]
-    parts = [f"Tautomer {first.tautomer_id}"]
+    parts = [f"Tautomer {first.tautomer_id + 1}"]
     if tautomer_fraction_sum is not None:
         parts.append(f"f: {_format_fraction_pct(tautomer_fraction_sum)}")
     if first.species_id:

@@ -30,6 +30,15 @@ def looser_opt_convergence_level(opt_level: str) -> Optional[str]:
     return OPT_CONVERGENCE_LEVELS[idx - 1]
 
 
+def opt_convergence_retry_levels(opt_level: str) -> list[str]:
+    """Return convergence presets to try, from opt_level down to crude."""
+    try:
+        idx = OPT_CONVERGENCE_LEVELS.index(opt_level)
+    except ValueError:
+        return [opt_level]
+    return list(OPT_CONVERGENCE_LEVELS[idx::-1])
+
+
 def float_regex() -> str:
     return r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?"
 

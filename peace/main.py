@@ -167,10 +167,13 @@ def _build_cli_parser():
     p.add_argument(
         "--conformer-screen-threshold",
         type=float,
-        default=50.0,
+        default=200.0,
         help=(
             "With --conformer-mode=mmff94, exclude protomers before xTB if their MMFF94 "
-            "conformer energy exceeds the lowest conformer energy by more than this value (kcal/mol)."
+            "conformer energy exceeds the lowest conformer energy by more than this value (kcal/mol). "
+            "Note this is high by default. In general it is possible that a conformer with low gas-phase energy "
+            "energy is not the lowest energy conformer, as solvation energy may be very high. So this is a conservative threshold."
+            " TODO: improve this, as this difference scales with the number of ionizable groups on the protomer."
         ),
     )
     p.add_argument(
@@ -953,7 +956,7 @@ if __name__ == "__main__":
                         f"threshold={float(args.conformer_screen_threshold):.2f} kcal/mol"
                     )
 
-                _log(f" *** SCREENING PROTOMERS (charge={charge_state}) *** ")
+                _log(f" *** SCREENING PROTOMERS (charge={charge_state}) WITH GFN2-xTB... *** ")
                 screening_records: list[tuple[int, int, Any, Optional[float]]] = []
                 for taut_idx, prot_idx, protomer in protomers_for_xtb_screen:
                     n_prot = len(spec.tautomers[taut_idx].protomers)
@@ -1011,7 +1014,7 @@ if __name__ == "__main__":
                     f"threshold={float(args.screen_threshold):.2f} kcal/mol"
                 )
 
-                _log(" *** REFINING SCREENED PROTOMERS... ***")
+                _log(" *** REFINING SCREENED PROTOMERS WITH g-xTB... ***")
                 for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
                     protomer_items = list(spec.tautomers[taut_idx].protomers.items())
                     prefix = (
@@ -1092,7 +1095,7 @@ if __name__ == "__main__":
                         screen_delta=screen_delta,
                         baseline_energy=min_postopt_solution_energy,
                     )
-                    protomer.mol.SetProp("workflow_status", "screened_out")
+                    protomer.mol.SetProp("workflow_status", "post_xtb_screened_out")
                     _log(
                         "Screened out protomer "
                         f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
