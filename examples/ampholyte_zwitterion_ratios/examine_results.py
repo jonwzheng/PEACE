@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 
 # Load benchmark results
 df = pd.read_csv('results/f_zwit_benchmark_with_empir_cxns/benchmark_results.csv')
@@ -29,8 +30,6 @@ ax.set_xlabel('Experimental $f_{zwit}$')
 ax.set_ylabel('Predicted $f_{zwit}$')
 ax.set_xlim(XMIN, XMAX)
 ax.set_ylim(XMIN, XMAX)
-ax.set_title('Experimental vs Predicted $f_{zwit}$')
-
 # Create a legend mapping colors to source
 handles, _ = scatter.legend_elements(prop="colors")
 labels = pd.Categorical(df['source']).categories
@@ -46,24 +45,46 @@ plt.savefig('f_zwit_scatter.png', dpi=300, bbox_inches='tight')
 # if Kz is 0, drop it
 KZ_exp = np.log10(df['experimental_f_zwit'] / (1 - df['experimental_f_zwit']))
 KZ_pred = np.log10(df['predicted_f_zwit'] / (1 - df['predicted_f_zwit']))
-fig, ax = plt.subplots(figsize=(7,6))
-ax.scatter(KZ_exp[KZ_exp != -np.inf], KZ_pred[KZ_exp != -np.inf], c='red', label='Kz')
-ax.set_xlabel('Experimental log10($K_{zwit}$)')
-ax.set_ylabel('Predicted log10($K_{zwit}$)')
+valid = np.isfinite(KZ_exp) & np.isfinite(KZ_pred)
+kz_exp_valid = KZ_exp[valid]
+kz_pred_valid = KZ_pred[valid]
 
-xmin_k = np.min((np.min(KZ_exp[KZ_exp != -np.inf] - 1), np.min(KZ_pred - 1)))
-xmax_k = np.max((np.max(KZ_exp[KZ_exp != np.inf] + 1), np.max(KZ_pred + 1)))
+fig, ax = plt.subplots(figsize=(7, 6))
+fig.patch.set_alpha(0)
+ax.patch.set_alpha(0)
+ax.scatter(kz_exp_valid, kz_pred_valid, c='red', label='Kz')
+ax.set_xlabel(r'Experimental $\log_{10}$ $K_{\mathrm{zwit}}$')
+ax.set_ylabel(r'Predicted $\log_{10}$ $K_{\mathrm{zwit}}$')
+
+xmin_k = np.min((np.min(kz_exp_valid - 1), np.min(kz_pred_valid - 1)))
+xmax_k = np.max((np.max(kz_exp_valid + 1), np.max(kz_pred_valid + 1)))
 ax.plot([xmin_k, xmax_k], [xmin_k, xmax_k], 'k--', lw=1)
 ax.set_xlim(xmin_k, xmax_k)
 ax.set_ylim(xmin_k, xmax_k)
-ax.set_title('Experimental vs Predicted log10($K_{zwit}$)')
 
 # highlight y=x+/-1 line from parity line, y=x+/-2 line
-ax.plot([xmin_k, xmax_k], [xmin_k+1, xmax_k+1], 'k--', lw=1, alpha=0.5)
-ax.plot([xmin_k, xmax_k], [xmin_k-1, xmax_k-1], 'k--', lw=1, alpha=0.5)
-ax.plot([xmin_k, xmax_k], [xmin_k+2, xmax_k+2], 'k--', lw=1, alpha=0.2)
-ax.plot([xmin_k, xmax_k], [xmin_k-2, xmax_k-2], 'k--', lw=1, alpha=0.2)
+ax.plot([xmin_k, xmax_k], [xmin_k + 1, xmax_k + 1], 'k--', lw=1, alpha=0.5)
+ax.plot([xmin_k, xmax_k], [xmin_k - 1, xmax_k - 1], 'k--', lw=1, alpha=0.5)
+ax.plot([xmin_k, xmax_k], [xmin_k + 2, xmax_k + 2], 'k--', lw=1, alpha=0.2)
+ax.plot([xmin_k, xmax_k], [xmin_k - 2, xmax_k - 2], 'k--', lw=1, alpha=0.2)
 
-#  save
+ax.xaxis.set_minor_locator(MultipleLocator(1))
+ax.yaxis.set_minor_locator(MultipleLocator(1))
+ax.grid(which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
+
+n = len(kz_exp_valid)
+mae = np.mean(np.abs(kz_pred_valid - kz_exp_valid))
+rmse = np.sqrt(np.mean((kz_pred_valid - kz_exp_valid) ** 2))
+stats_text = f'N = {n}\nMAE = {mae:.2f}\nRMSE = {rmse:.2f}'
+ax.text(
+    0.97, 0.03, stats_text,
+    transform=ax.transAxes,
+    fontsize=10,
+    verticalalignment='bottom',
+    horizontalalignment='right',
+    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'),
+)
+
 plt.tight_layout()
-plt.savefig('kz_scatter_log10.png', dpi=300, bbox_inches='tight')
+plt.savefig('kz_scatter_log10.svg', bbox_inches='tight', transparent=True)
+plt.savefig('kz_scatter_log10.png', dpi=300, bbox_inches='tight', transparent=True)
