@@ -1,10 +1,10 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator
+from matplotlib.ticker import FuncFormatter, MaxNLocator, MultipleLocator
 
 # Load benchmark results
-df = pd.read_csv('results/f_zwit_benchmark_with_empir_cxns/benchmark_results.csv')
+df = pd.read_csv('results/f_zwit_benchmark/benchmark_results.csv')
 
 # Prepare plot
 fig, ax = plt.subplots(figsize=(13,6))
@@ -53,8 +53,9 @@ fig, ax = plt.subplots(figsize=(7, 6))
 fig.patch.set_alpha(0)
 ax.patch.set_alpha(0)
 ax.scatter(kz_exp_valid, kz_pred_valid, c='red', label='Kz')
-ax.set_xlabel(r'Experimental $\log_{10}$ $K_{\mathrm{zwit}}$')
-ax.set_ylabel(r'Predicted $\log_{10}$ $K_{\mathrm{zwit}}$')
+ax.set_xlabel(r'Experimental $\log_{10}$ $K_{\mathrm{zwit}}$', fontsize=20)
+ax.set_ylabel(r'Predicted $\log_{10}$ $K_{\mathrm{zwit}}$', fontsize=20)
+ax.tick_params(axis='both', which='major', labelsize=20)
 
 xmin_k = np.min((np.min(kz_exp_valid - 1), np.min(kz_pred_valid - 1)))
 xmax_k = np.max((np.max(kz_exp_valid + 1), np.max(kz_pred_valid + 1)))
@@ -68,7 +69,11 @@ ax.plot([xmin_k, xmax_k], [xmin_k - 1, xmax_k - 1], 'k--', lw=1, alpha=0.5)
 ax.plot([xmin_k, xmax_k], [xmin_k + 2, xmax_k + 2], 'k--', lw=1, alpha=0.2)
 ax.plot([xmin_k, xmax_k], [xmin_k - 2, xmax_k - 2], 'k--', lw=1, alpha=0.2)
 
+ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{int(x)}'))
 ax.xaxis.set_minor_locator(MultipleLocator(1))
+ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{int(x)}'))
 ax.yaxis.set_minor_locator(MultipleLocator(1))
 ax.grid(which='minor', linestyle=':', linewidth=0.5, alpha=0.5)
 
@@ -79,7 +84,7 @@ stats_text = f'N = {n}\nMAE = {mae:.2f}\nRMSE = {rmse:.2f}'
 ax.text(
     0.97, 0.03, stats_text,
     transform=ax.transAxes,
-    fontsize=10,
+    fontsize=20,
     verticalalignment='bottom',
     horizontalalignment='right',
     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray'),
