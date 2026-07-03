@@ -9,20 +9,17 @@ from pathlib import Path
 from typing import Callable, Literal, Optional
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdDetermineBonds, Descriptors
+from rdkit.Chem import AllChem, rdDetermineBonds
 
 from .calculators import (
-    cleanup_orca_refine_scratch_keep_log,
     run_aimnet2_optimization,
     run_aimnet2_single_point_energy,
-    run_orca_cosmo_rs,
     run_cpcmx_single_point,
     run_gxtb_single_point_energy,
     run_gxtb2_optimization,
     run_gxtb2_single_point_energy,
     run_gxtb_optimization,
     run_hessian_and_parse_energies,
-    run_skala_single_point_energy,
     run_xtb_optimization,
 )
 from .calculators.common import opt_convergence_retry_levels
@@ -370,117 +367,6 @@ def _formal_charge(mol: Chem.Mol) -> int:
     return int(Chem.GetFormalCharge(mol))
 
 
-def _default_spin_multiplicity(mol: Chem.Mol) -> int:
-    """
-    Closed-shell default: 2S+1 with S inferred from radical electrons (RDKit).
-    """
-    r = int(Descriptors.NumRadicalElectrons(mol))
-    return max(1, r + 1)
-
-
-def refine_protomer_solvation_with_orca_cosmors(
-    protomer: Protomer,
-    *,
-    scratch_dir: str | Path,
-    solvent: str = "water",
-    keep_scratch: bool = False,
-    charge_override: Optional[int] = None,
-    orca_executable: str = "orca",
-    dry_run: bool = False,
-    timeout_s: Optional[int] = None,
-    log_paths: Optional[list[Path]] = None,
-    progress_callback: Optional[Callable[[str], None]] = None,
-) -> Optional[float]:
-    """
-    Run ORCA openCOSMO-RS on the current 3D geometry (e.g. post–xTB optimization),
-    update solvation and solution-phase free energies, and keep the prior
-    CPCM-X value as ``solvation_free_energy_cpcmx_kcal_mol`` when replacing
-    ``solvation_free_energy_kcal_mol``.
-
-    Coordinates in the ORCA input are taken from RDKit mol conformer coordinates.
-    """
-    def _progress(message: str) -> None:
-        if progress_callback is not None:
-            progress_callback(message)
-
-    if protomer.mol is None:
-        raise ValueError("Protomer.mol is None; cannot run ORCA COSMO-RS refine.")
-    mol = protomer.mol
-    scratch = Path(scratch_dir)
-    scratch.mkdir(parents=True, exist_ok=True)
-    lp = log_paths if log_paths is not None else [_species_workflow_log_path(scratch)]
-
-    charge = int(charge_override) if charge_override is not None else _formal_charge(mol)
-    mult = _default_spin_multiplicity(mol)
-    _progress(f"ORCA COSMO-RS (charge={charge}, mult={mult})")
-
-    if mol.HasProp("solvation_free_energy_kcal_mol") and not mol.HasProp("solvation_free_energy_cpcmx_kcal_mol"):
-        try:
-            prev = float(mol.GetProp("solvation_free_energy_kcal_mol"))
-            _set_mol_prop_double(mol, "solvation_free_energy_cpcmx_kcal_mol", prev)
-        except ValueError:
-            pass
-
-    dgsolv, gas_sp_orca_h, _merged = run_orca_cosmo_rs(
-        mol=mol,
-        scratch_dir=scratch,
-        charge=charge,
-        multiplicity=mult,
-        solvent=solvent,
-        orca_executable=orca_executable,
-        timeout_s=timeout_s,
-        dry_run=dry_run,
-        log_paths=lp,
-        run_command=_run,
-        log_status=_log_status,
-    )
-    cleanup_orca_refine_scratch_keep_log(
-        scratch,
-        keep_scratch=keep_scratch,
-        log_paths=lp,
-        log_status=_log_status,
-    )
-    if dgsolv is None:
-        return None
-
-    _set_mol_prop_double(mol, "solvation_free_energy_cosmors_kcal_mol", dgsolv)
-    _set_mol_prop_double(mol, "solvation_free_energy_kcal_mol", dgsolv)
-    mol.SetProp("solvation_refined_cosmors", "true")
-
-    gas_sp_energy_kcal_mol: Optional[float] = None
-    if mol.HasProp("gas_sp_energy_kcal_mol"):
-        gas_sp_energy_kcal_mol = float(mol.GetDoubleProp("gas_sp_energy_kcal_mol"))
-        _set_mol_prop_double(mol, "gas_sp_energy_gxtb_kcal_mol", gas_sp_energy_kcal_mol)
-
-    gas_sp_energy_bp86_kcal_mol: Optional[float] = None
-    if gas_sp_orca_h is not None:
-        gas_sp_energy_bp86_kcal_mol = gas_sp_orca_h * HARTREE_TO_KCAL_MOL
-        _set_mol_prop_double(mol, "gas_sp_energy_bp86_kcal_mol", gas_sp_energy_bp86_kcal_mol)
-        # Replace the active gas SP term used in final solution free energy.
-        gas_sp_energy_kcal_mol = gas_sp_energy_bp86_kcal_mol
-        _set_mol_prop_double(mol, "gas_sp_energy_kcal_mol", gas_sp_energy_kcal_mol)
-        _log_status(lp, "OK", f"using BP86 gas-phase SP for refined solution energy: {gas_sp_energy_bp86_kcal_mol}")
-    else:
-        _log_status(
-            lp,
-            "WARN",
-            "ORCA gas-phase SP unavailable; keeping existing gas_sp_energy_kcal_mol value",
-        )
-    rrho_contribution_kcal_mol: Optional[float] = None
-    if mol.HasProp("rrho_contribution_kcal_mol"):
-        rrho_contribution_kcal_mol = float(mol.GetDoubleProp("rrho_contribution_kcal_mol"))
-
-    solution_phase = _compute_solution_phase_energy(
-        gas_sp_energy_kcal_mol,
-        dgsolv,
-        rrho_contribution_kcal_mol,
-        lp,
-    )
-    _set_mol_prop_double(mol, "solution_phase_free_energy_kcal_mol", solution_phase)
-    _progress("ORCA COSMO-RS refine done")
-    return solution_phase
-
-
 def _embed_conformers_rdkit_mmff94(
     mol: Chem.Mol,
     *,
@@ -580,7 +466,6 @@ def _search_conformers_rdkit_mmff94(
 
 
 ProtomerRef = tuple[int, int, Protomer]
-ProtomerEnergyRecord = tuple[int, int, Protomer, Optional[float], Optional[float]]
 
 
 def run_batch_conformer_generation(
@@ -635,52 +520,6 @@ def run_batch_conformer_generation(
                 protomer.mol.SetProp("workflow_status", "conformer_generation_failed")
 
     _log_status(log_paths, "DONE", "batch conformer generation finished")
-
-
-def partition_protomers_by_conformer_energy(
-    protomer_refs: list[ProtomerRef],
-    *,
-    threshold_kcal_mol: float,
-) -> tuple[list[ProtomerRef], list[ProtomerEnergyRecord]]:
-    """
-    Split protomers using MMFF94 conformer energy relative to the species minimum.
-
-    Protomers above ``threshold_kcal_mol`` are returned in the screened-out list with
-    their conformer energy and delta stored on protomer.mol.
-    """
-    records: list[ProtomerEnergyRecord] = []
-    for taut_idx, prot_idx, protomer in protomer_refs:
-        energy: Optional[float] = None
-        if protomer.mol is not None and protomer.mol.HasProp("conformer_energy_kcal_mol"):
-            try:
-                energy = float(protomer.mol.GetProp("conformer_energy_kcal_mol"))
-            except ValueError:
-                energy = None
-        records.append((taut_idx, prot_idx, protomer, energy, None))
-
-    valid_energies = [row[3] for row in records if row[3] is not None]
-    min_energy = min(valid_energies) if valid_energies else None
-
-    annotated: list[ProtomerEnergyRecord] = []
-    for taut_idx, prot_idx, protomer, energy, _ in records:
-        delta = (energy - min_energy) if energy is not None and min_energy is not None else None
-        if protomer.mol is not None:
-            _set_mol_prop_double(protomer.mol, "conformer_energy_kcal_mol", energy)
-            _set_mol_prop_double(protomer.mol, "conformer_delta_kcal_mol", delta)
-        annotated.append((taut_idx, prot_idx, protomer, energy, delta))
-
-    if min_energy is None:
-        return list(protomer_refs), []
-
-    kept: list[ProtomerRef] = []
-    screened_out: list[ProtomerEnergyRecord] = []
-    for taut_idx, prot_idx, protomer, energy, delta in annotated:
-        if delta is not None and delta > float(threshold_kcal_mol):
-            screened_out.append((taut_idx, prot_idx, protomer, energy, delta))
-        else:
-            kept.append((taut_idx, prot_idx, protomer))
-
-    return kept, screened_out
 
 
 def _mol_to_xyz_block(mol: Chem.Mol, *, conf_id: int = 0) -> str:
@@ -1030,8 +869,6 @@ def _preserve_output_files(
             "xtbfreq_run.log",
             "aimnet2opt_run.log",
             "aimnet2sp_run.log",
-            "skalasp_run.log",
-            "orca_cosmo_run.log",
         ]
         for file_name in log_files_to_preserve:
             src = scratch_dir / file_name
@@ -1291,7 +1128,7 @@ def run_protomer_solvation(
     solvent: Literal["water"] = "water",
     gfn: int = 2,
     opt_level: str = "loose",
-    sp_energy: Literal["gxtb", "xtb", "skala", "aimnet2"] = "gxtb",
+    sp_energy: Literal["gxtb", "xtb", "aimnet2"] = "gxtb",
     gxtb_post_optimize: bool = False,
     recompute_solvation: bool = False,
     recompute_frequencies: bool = False,
@@ -1308,7 +1145,7 @@ def run_protomer_solvation(
 
     Default staged behavior:
     1) Reuse existing pre-screened geometry and terms if present. Otherwise calculate from scratch.
-    2) Run 'refined' gas-phase SP (depending on provided engine) on current geometry.
+    2) Run gas-phase SP (depending on provided engine) on current geometry.
     3) Combine gas SP + RRHO + solvation into final solution-phase free energy.
     Optional flags allow geometry optimization and/or recomputing solvation and frequency terms.
 
@@ -1460,20 +1297,6 @@ def run_protomer_solvation(
         def _sp_energy_from_xtb_hessian() -> Optional[float]:
             return gas_sp_energy_kcal_mol
 
-        def _sp_energy_from_skala() -> Optional[float]:
-            _progress("computing gas-phase single point (Skala)")
-            multiplicity = _default_spin_multiplicity(protomer.mol)
-            value_kcal_mol, _ = run_skala_single_point_energy(
-                scratch_dir=scratch_dir,
-                xyz_path=active_xyz_path,
-                charge=charge,
-                multiplicity=multiplicity,
-                dry_run=dry_run,
-                log_paths=log_paths,
-                log_status=_log_status,
-            )
-            return value_kcal_mol
-
         def _sp_energy_from_aimnet2() -> Optional[float]:
             _progress("computing gas-phase single point (AIMNet2)")
             value_kcal_mol, _ = run_aimnet2_single_point_energy(
@@ -1489,7 +1312,6 @@ def run_protomer_solvation(
         sp_energy_strategies: dict[str, Callable[[], Optional[float]]] = {
             "gxtb": _sp_energy_from_gxtb,
             "xtb": _sp_energy_from_xtb_hessian,
-            "skala": _sp_energy_from_skala,
             "aimnet2": _sp_energy_from_aimnet2,
         }
         if not reused_optimization_sp:

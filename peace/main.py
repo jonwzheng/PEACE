@@ -119,8 +119,8 @@ def _build_cli_parser():
         "--sp-energy",
         type=str,
         default="gxtb",
-        choices=["gxtb", "xtb", "skala", "aimnet2"],
-        help="Gas-phase SP source: 'gxtb', 'xtb', 'skala', or 'aimnet2'.",
+        choices=["gxtb", "xtb", "aimnet2"],
+        help="Gas-phase SP source: 'gxtb', 'xtb', or 'aimnet2'.",
     )
     p.add_argument(
         "--gxtb-post-optimize",
@@ -165,29 +165,9 @@ def _build_cli_parser():
         help="Exclude protomers from full post-screen optimization if xTB screening delta exceeds energy threshold (kcal/mol).",
     )
     p.add_argument(
-        "--conformer-screen-threshold",
-        type=float,
-        default=200.0,
-        help=(
-            "With --conformer-mode=mmff94, exclude protomers before xTB if their MMFF94 "
-            "conformer energy exceeds the lowest conformer energy by more than this value (kcal/mol). "
-            "Note this is high by default. In general it is possible that a conformer with low gas-phase energy "
-            "energy is not the lowest energy conformer, as solvation energy may be very high. So this is a conservative threshold."
-            " TODO: improve this, as this difference scales with the number of ionizable groups on the protomer."
-        ),
-    )
-    p.add_argument(
         "--exclude-unconverged",
         action="store_true",
         help="Exclude connectivity-mismatch protomers from Boltzmann weighting and f_zwit while still reporting them.",
-    )
-    p.add_argument(
-        "--empirical-corrections",
-       action="store_true",
-        help=(
-            "Before Boltzmann weighting, lower solution-phase free energies of zwitterionic protomers."
-            "Disabled by default."
-        ),
     )
     p.add_argument(
         "--skip-single-protomer-solvation", # TODO: make apply for post-screening step
@@ -196,31 +176,6 @@ def _build_cli_parser():
             "With --solvation, skip screening/optimization for species that have exactly one tautomer "
             "and one protomer; assign default solution-phase free energy of -10000 kcal/mol."
         ),
-    )
-    p.add_argument(
-        "--refine",
-        action="store_true",
-        help=(
-            "After the g-xTB calculation stage, re-evaluate solvation with ORCA openCOSMO-RS for "
-            "low-lying protomers (requires ORCA on PATH). Implies workflows that completed with valid "
-            "solution-phase energies; use with --solvation."
-        ),
-    )
-
-    p.add_argument(
-        "--refine-threshold",
-        type=float,
-        default=5.0,
-        help=(
-            "For --refine: include protomers whose g-xTB solution-phase free energy is within "
-            "this many kcal/mol of the lowest such energy (default: 5)."
-        ),
-    )
-    p.add_argument(
-        "--orca-executable",
-        type=str,
-        default="orca",
-        help="ORCA executable for the optional --refine COSMO-RS step.",
     )
     p.add_argument(
         "--site-search-mode",
@@ -660,50 +615,6 @@ def _assign_screening_placeholder(
     return placeholder_energy
 
 
-def _assign_conformer_placeholder(
-    protomer,
-    *,
-    conformer_energy: Optional[float],
-    conformer_delta: Optional[float],
-    baseline_energy: Optional[float],
-) -> Optional[float]:
-    placeholder_energy = _placeholder_energy(baseline_energy, conformer_delta)
-    _set_optional_double_prop(protomer, "conformer_energy_kcal_mol", conformer_energy)
-    _set_optional_double_prop(protomer, "conformer_delta_kcal_mol", conformer_delta)
-    _set_optional_double_prop(
-        protomer,
-        "conformer_placeholder_solution_phase_free_energy_kcal_mol",
-        placeholder_energy,
-    )
-    _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
-    return placeholder_energy
-
-
-def _apply_zwitterion_empirical_correction(
-    tautomer_items: list[tuple[int, Tautomer]],
-    *,
-    correction_kcal_mol: float = -3.0,
-) -> int:
-    corrected_count = 0
-    for _taut_idx, taut in tautomer_items:
-        for _prot_idx, protomer in taut.protomers.items():
-            if protomer.mol is None or not protomer.is_zwitterion:
-                continue
-            if not protomer.mol.HasProp("solution_phase_free_energy_kcal_mol"):
-                continue
-            try:
-                current_energy = float(protomer.mol.GetProp("solution_phase_free_energy_kcal_mol"))
-            except ValueError:
-                continue
-            corrected_energy = current_energy + float(correction_kcal_mol)
-            protomer.mol.SetDoubleProp("solution_phase_free_energy_uncorrected_kcal_mol", current_energy)
-            protomer.mol.SetDoubleProp("solution_phase_free_energy_kcal_mol", corrected_energy)
-            protomer.mol.SetDoubleProp("empirical_correction_kcal_mol", float(correction_kcal_mol))
-            protomer.mol.SetProp("empirical_correction_applied", "true")
-            corrected_count += 1
-    return corrected_count
-
-
 def _header_banner() -> str:
     return """ RUNNING PEACE...
                          @@@%%@@@%@@@%%%@@              
@@ -738,8 +649,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if int(args.charge_min) > int(args.charge_max):
         parser.error("--charge-min must be <= --charge-max")
-    if args.refine and not args.solvation:
-        parser.error("--refine requires --solvation")
     if args.plot in ("cutoff", "count") and args.plot_filter is None:
         parser.error(f"--plot-filter is required when --plot={args.plot}")
     if args.plot_from_csv and args.no_plot:
@@ -880,7 +789,6 @@ if __name__ == "__main__":
 
     if args.solvation:
         from peace.solvation import (
-            partition_protomers_by_conformer_energy,
             run_batch_conformer_generation,
             run_protomer_screening,
             run_protomer_solvation,
@@ -942,23 +850,9 @@ if __name__ == "__main__":
                     progress_callback=lambda stage: _log(f"  [conformers] {stage}"),
                 )
 
-                conformer_screened_out: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
-                protomers_for_xtb_screen = all_protomer_refs
-                if args.conformer_mode == "mmff94":
-                    protomers_for_xtb_screen, conformer_screened_out = partition_protomers_by_conformer_energy(
-                        all_protomer_refs,
-                        threshold_kcal_mol=float(args.conformer_screen_threshold),
-                    )
-                    _log(
-                        "Conformer screening finished: "
-                        f"kept={len(protomers_for_xtb_screen)} "
-                        f"excluded={len(conformer_screened_out)} "
-                        f"threshold={float(args.conformer_screen_threshold):.2f} kcal/mol"
-                    )
-
                 _log(f" *** SCREENING PROTOMERS (charge={charge_state}) WITH GFN2-xTB... *** ")
                 screening_records: list[tuple[int, int, Any, Optional[float]]] = []
-                for taut_idx, prot_idx, protomer in protomers_for_xtb_screen:
+                for taut_idx, prot_idx, protomer in all_protomer_refs:
                     n_prot = len(spec.tautomers[taut_idx].protomers)
                     prefix = (
                         f"charge {charge_state:+d} "
@@ -1103,170 +997,8 @@ if __name__ == "__main__":
                         f"placeholder_solution_energy={placeholder_energy}"
                     )
 
-                for taut_idx, prot_idx, protomer, conformer_energy, conformer_delta in conformer_screened_out:
-                    if protomer.mol is None:
-                        continue
-                    protomer.mol.SetProp("conformer_screening_skipped_qm", "true")
-                    placeholder_energy = _assign_conformer_placeholder(
-                        protomer,
-                        conformer_energy=conformer_energy,
-                        conformer_delta=conformer_delta,
-                        baseline_energy=min_postopt_solution_energy,
-                    )
-                    protomer.mol.SetProp("workflow_status", "conformer_screened_out")
-                    _log(
-                        "Conformer-screened protomer "
-                        f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
-                        f"conformer_delta={conformer_delta} "
-                        f"placeholder_solution_energy={placeholder_energy}"
-                    )
-            ##############################
-            # ORCA openCOSMO-RS refinement
-            if (not skip_single) and args.refine:
-                from peace.solvation import refine_protomer_solvation_with_orca_cosmors
-
-                _log(" *** ORCA openCOSMO-RS REFINE *** ")
-                refine_pool: list[tuple[int, int, Any, float]] = []
-                for taut_idx, prot_idx, protomer, _screen_e, _screen_d in protomers_to_optimize:
-                    if protomer.mol is None or not protomer.mol.HasProp("solution_phase_free_energy_kcal_mol"):
-                        continue
-                    try:
-                        g_sol = float(protomer.mol.GetProp("solution_phase_free_energy_kcal_mol"))
-                    except ValueError:
-                        continue
-                    refine_pool.append((taut_idx, prot_idx, protomer, g_sol))
-                if not refine_pool:
-                    _log("Refine: no protomers with valid post–g-xTB solution-phase energies; skipping ORCA.")
-                else:
-                    g_min_ref = min(x[3] for x in refine_pool)
-                    thr_ref = float(args.refine_threshold)
-                    picked = [x for x in refine_pool if x[3] - g_min_ref <= thr_ref + 1e-9]
-                    if len(picked) < 2:
-                        _log(
-                            "Refine: fewer than two protomers within threshold; skipping openCOSMO-RS ORCA calc to save resources. "
-                            f"within_threshold={len(picked)} threshold={thr_ref:.3f} kcal/mol"
-                        )
-                        _log(
-                            "Refine: criterion requires at least two candidates (e.g., 0 and <= threshold kcal/mol) "
-                            "relative to the lowest post–g-xTB solution-phase energy."
-                        )
-                        picked = []
-                    picked_keys = {(taut_idx, prot_idx) for taut_idx, prot_idx, _protomer, _g_sol in picked}
-                    _log(
-                        "Refine: lowest g-xTB solution-phase G = "
-                        f"{g_min_ref:.6f} kcal/mol; threshold = {thr_ref:.3f} kcal/mol; "
-                        f"ORCA COSMO-RS runs = {len(picked)}"
-                    )
-                    for taut_idx, prot_idx, protomer, g_sol in picked:
-                        n_prot = len(spec.tautomers[taut_idx].protomers)
-                        prefix = (
-                            f"charge {charge_state:+d} "
-                            f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
-                            f"protomer {prot_idx + 1}/{n_prot}"
-                        )
-                        delta = g_sol - g_min_ref
-                        _log(f"ORCA refine {prefix} (ΔG from min = {delta:.3f} kcal/mol)")
-                        refine_root = species_scratch / f"tautomer_{taut_idx}" / "orca_refine" / f"protomer_{prot_idx}"
-                        wf_log = species_scratch / "peace.out"
-                        try:
-                            refine_protomer_solvation_with_orca_cosmors(
-                                protomer,
-                                scratch_dir=refine_root,
-                                solvent="water",
-                                keep_scratch=bool(args.keep_scratch),
-                                orca_executable=str(args.orca_executable),
-                                dry_run=bool(args.dry_run),
-                                log_paths=[wf_log],
-                                progress_callback=lambda s, p=prefix: _log(f"  [{p}] {s}"),
-                            )
-                        except Exception as exc:
-                            _log(f"ORCA refine failed for {prefix}: {exc}")
-
-                    refined_success: list[tuple[int, int, Any, float]] = []
-                    for taut_idx, prot_idx, protomer, _g_sol_pre in picked:
-                        if protomer.mol is None:
-                            continue
-                        if (
-                            protomer.mol.HasProp("solvation_refined_cosmors")
-                            and protomer.mol.GetProp("solvation_refined_cosmors").lower() == "true"
-                            and protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
-                        ):
-                            try:
-                                g_refined = float(protomer.mol.GetProp("solution_phase_free_energy_kcal_mol"))
-                            except ValueError:
-                                continue
-                            refined_success.append((taut_idx, prot_idx, protomer, g_refined))
-
-                    if not refined_success:
-                        _log("Refine: no successful ORCA results; leaving post–g-xTB energies unchanged.")
-                    else:
-                        min_refined_final = min(x[3] for x in refined_success)
-                        _log(
-                            "Refine propagation: anchoring non-refined screened-in protomers to "
-                            f"lowest refined final G = {min_refined_final:.6f} kcal/mol using pre-refine deltas."
-                        )
-
-                        for taut_idx, prot_idx, protomer, g_sol_pre in refine_pool:
-                            if protomer.mol is None:
-                                continue
-                            is_refined_success = (
-                                protomer.mol.HasProp("solvation_refined_cosmors")
-                                and protomer.mol.GetProp("solvation_refined_cosmors").lower() == "true"
-                            )
-                            if is_refined_success:
-                                continue
-                            delta_pre = g_sol_pre - g_min_ref
-                            propagated_energy = min_refined_final + delta_pre
-                            protomer.mol.SetDoubleProp("refine_pre_delta_kcal_mol", float(delta_pre))
-                            protomer.mol.SetDoubleProp(
-                                "solution_phase_free_energy_unrefined_kcal_mol",
-                                float(g_sol_pre),
-                            )
-                            protomer.mol.SetDoubleProp(
-                                "solution_phase_free_energy_kcal_mol",
-                                float(propagated_energy),
-                            )
-                            protomer.mol.SetProp("refine_propagated_from_unrefined_delta", "true")
-                            status = "selected_but_refine_failed" if (taut_idx, prot_idx) in picked_keys else "not_selected_for_refine"
-                            protomer.mol.SetProp("refine_status", status)
-
-                        # Keep screened-out placeholder energies consistent with the final refined baseline.
-                        for taut_idx, prot_idx, protomer, _screening_energy, screen_delta in screened_out:
-                            if protomer.mol is None or screen_delta is None:
-                                continue
-                            placeholder_energy = _placeholder_energy(min_refined_final, screen_delta)
-                            _set_optional_double_prop(
-                                protomer,
-                                "screening_placeholder_solution_phase_free_energy_kcal_mol",
-                                placeholder_energy,
-                            )
-                            _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
-                            protomer.mol.SetProp("screening_placeholder_reanchored_to_refined_min", "true")
-
-                        for taut_idx, prot_idx, protomer, _conformer_energy, conformer_delta in conformer_screened_out:
-                            if protomer.mol is None or conformer_delta is None:
-                                continue
-                            placeholder_energy = _placeholder_energy(min_refined_final, conformer_delta)
-                            _set_optional_double_prop(
-                                protomer,
-                                "conformer_placeholder_solution_phase_free_energy_kcal_mol",
-                                placeholder_energy,
-                            )
-                            _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
-                            protomer.mol.SetProp("conformer_placeholder_reanchored_to_refined_min", "true")
-
             if not skip_single:
                 _log(f"Optimization outputs saved under: {species_scratch}")
-
-            if args.empirical_corrections:
-                corrected_zwitterions = _apply_zwitterion_empirical_correction(
-                    tautomer_items,
-                    correction_kcal_mol=-2.8,
-                )
-                _log(
-                    "Applied zwitterion empirical correction before Boltzmann weighting: "
-                    f"count={corrected_zwitterions} delta=-2.8 kcal/mol"
-                )
 
             _log(f"Calculating Boltzmann populations for charge={charge_state}")
             excluded_unconverged_count = 0
