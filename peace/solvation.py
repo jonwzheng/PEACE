@@ -74,6 +74,17 @@ class ConformerWorkflowResult:
     opt_xyz_path: Optional[Path] = None
 
 
+@dataclass(frozen=True)
+class GxtbRefinementResult:
+    gas_sp_energy_kcal_mol: Optional[float]
+    gxtb_freq_xyz_path: Optional[Path] = None
+
+
+def _input_mol_for_connectivity(protomer: Protomer, mol: Chem.Mol) -> Chem.Mol:
+    input_mol = getattr(protomer, "input_mol", None)
+    return input_mol if input_mol is not None else mol
+
+
 def _format_energy_entry(value: Optional[float], *, failed_step: str) -> EnergyListValue:
     if value is None:
         return f"{failed_step}-failed"
@@ -634,6 +645,184 @@ def _run_xtb_optimization_with_retry(
             run_command=_run,
             log_status=_log_status,
         ),
+    )
+
+
+def _prepare_scratch_xyz(scratch_dir: Path, source_xyz: Path, dest_name: str = "input.xyz") -> Path:
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    dest = scratch_dir / dest_name
+    shutil.copy2(source_xyz, dest)
+    return dest
+
+
+def _try_gxtb_gas_phase_refinement(
+    *,
+    protomer: Protomer,
+    mol: Chem.Mol,
+    input_xyz_path: Path,
+    gas_sp_energy_kcal_mol: Optional[float],
+    scratch_dir: Path,
+    xtb_executable: str,
+    xtb_version: XtbVersion,
+    opt_level: str,
+    charge: int,
+    dry_run: bool,
+    timeout_s: Optional[int],
+    log_paths: list[Path],
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> GxtbRefinementResult:
+    """
+    Re-optimize at g-xTB gas phase and recalculate the gas-phase SP energy.
+
+    Does not change the stored protomer geometry or affect ALPB/CPCM-X geometry.
+    When g-xTB optimization passes connectivity against the input mol, the optimized
+    geometry is preserved for optional downstream frequency calculations.
+    """
+    def _progress(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
+    fallback_gas_sp = gas_sp_energy_kcal_mol
+    reference_mol = _input_mol_for_connectivity(protomer, mol)
+    refine_input_xyz = scratch_dir / "gxtb_refine_input.xyz"
+    shutil.copy2(input_xyz_path, refine_input_xyz)
+
+    _progress("re-optimizing geometry with g-xTB (gas phase)")
+    try:
+        gxtb_opt_xyz, _, _ = _run_gxtb_optimization_with_retry(
+            protomer=protomer,
+            scratch_dir=scratch_dir,
+            input_xyz_path=refine_input_xyz,
+            input_mol=mol,
+            xtb_executable=xtb_executable,
+            xtb_version=xtb_version,
+            opt_level=opt_level,
+            charge=charge,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            progress_callback=progress_callback,
+        )
+    except (RuntimeError, FileNotFoundError) as exc:
+        _log_status(
+            log_paths,
+            "WARN",
+            f"g-xTB gas-phase re-optimization failed; keeping previous g-xTB SP energy: {exc}",
+        )
+        return GxtbRefinementResult(gas_sp_energy_kcal_mol=fallback_gas_sp)
+
+    if not _xyz_connectivity_matches_reference(gxtb_opt_xyz, reference_mol):
+        _log_status(
+            log_paths,
+            "WARN",
+            "g-xTB gas-phase re-optimization connectivity mismatch against input mol; "
+            "keeping previous g-xTB SP energy and GFN2-xTB/ALPB frequency geometry",
+        )
+        return GxtbRefinementResult(gas_sp_energy_kcal_mol=fallback_gas_sp)
+
+    gxtb_freq_xyz_path = scratch_dir / "gxtb_opt.xyz"
+    shutil.copy2(gxtb_opt_xyz, gxtb_freq_xyz_path)
+
+    _progress("recomputing g-xTB gas-phase single point after re-optimization")
+    run_gxtb_sp = _resolve_gxtb_single_point_runner(xtb_version)
+    try:
+        refined_gas_sp, _ = run_gxtb_sp(
+            scratch_dir=scratch_dir,
+            xyz_path=gxtb_freq_xyz_path,
+            xtb_executable=xtb_executable,
+            charge=charge,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
+            log_paths=log_paths,
+            run_command=_run,
+            log_status=_log_status,
+        )
+    except (RuntimeError, FileNotFoundError) as exc:
+        _log_status(
+            log_paths,
+            "WARN",
+            f"g-xTB gas-phase SP after re-optimization failed; keeping previous g-xTB SP energy: {exc}",
+        )
+        return GxtbRefinementResult(
+            gas_sp_energy_kcal_mol=fallback_gas_sp,
+            gxtb_freq_xyz_path=gxtb_freq_xyz_path,
+        )
+
+    if refined_gas_sp is None:
+        _log_status(
+            log_paths,
+            "WARN",
+            "g-xTB gas-phase SP after re-optimization returned no energy; keeping previous g-xTB SP energy",
+        )
+        return GxtbRefinementResult(
+            gas_sp_energy_kcal_mol=fallback_gas_sp,
+            gxtb_freq_xyz_path=gxtb_freq_xyz_path,
+        )
+
+    _log_status(log_paths, "OK", "g-xTB gas-phase re-optimization and SP succeeded")
+    return GxtbRefinementResult(
+        gas_sp_energy_kcal_mol=refined_gas_sp,
+        gxtb_freq_xyz_path=gxtb_freq_xyz_path,
+    )
+
+
+def _try_hessian_with_fallback(
+    *,
+    primary_xyz_path: Optional[Path],
+    fallback_xyz_path: Path,
+    scratch_dir: Path,
+    xtb_executable: str,
+    charge: int,
+    gfn: int,
+    dry_run: bool,
+    timeout_s: Optional[int],
+    log_paths: list[Path],
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    if primary_xyz_path is not None:
+        gxtb_hess_scratch = scratch_dir / "hess_gxtb"
+        gxtb_hess_xyz = _prepare_scratch_xyz(gxtb_hess_scratch, primary_xyz_path, "input.xyz")
+        try:
+            gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, gas_sp_energy_h = run_hessian_and_parse_energies(
+                scratch_dir=gxtb_hess_scratch,
+                xyz_path=gxtb_hess_xyz,
+                xtb_executable=xtb_executable,
+                charge=charge,
+                gfn=gfn,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
+            )
+            if gas_sp_energy_xtb_kcal_mol is not None and rrho_contribution_kcal_mol is not None:
+                _log_status(log_paths, "OK", "RRHO computed at g-xTB gas-phase geometry")
+                return gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, gas_sp_energy_h
+            _log_status(
+                log_paths,
+                "WARN",
+                "RRHO at g-xTB gas-phase geometry returned incomplete terms; "
+                "falling back to GFN2-xTB/ALPB geometry",
+            )
+        except (RuntimeError, FileNotFoundError) as exc:
+            _log_status(
+                log_paths,
+                "WARN",
+                f"RRHO at g-xTB gas-phase geometry failed; falling back to GFN2-xTB/ALPB geometry: {exc}",
+            )
+
+    alpb_hess_scratch = scratch_dir / "hess_alpb"
+    alpb_hess_xyz = _prepare_scratch_xyz(alpb_hess_scratch, fallback_xyz_path, "input.xyz")
+    return run_hessian_and_parse_energies(
+        scratch_dir=alpb_hess_scratch,
+        xyz_path=alpb_hess_xyz,
+        xtb_executable=xtb_executable,
+        charge=charge,
+        gfn=gfn,
+        timeout_s=timeout_s,
+        dry_run=dry_run,
+        log_paths=log_paths,
+        run_command=_run,
+        log_status=_log_status,
     )
 
 
@@ -1280,28 +1469,15 @@ def _run_single_conformer_workflow(
             terms.solution_phase_free_energy_kcal_mol = _format_energy_entry(None, failed_step="connectivity")
             return ConformerWorkflowResult(terms=terms, opt_xyz_path=active_xyz_path)
 
-        _progress("computing g-xTB gas-phase single point")
-        run_gxtb_sp = _resolve_gxtb_single_point_runner(xtb_version)
-        gas_sp_energy_kcal_mol, _ = run_gxtb_sp(
-            scratch_dir=scratch_dir,
-            xyz_path=active_xyz_path,
-            xtb_executable=xtb_executable,
-            charge=charge,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-            run_command=_run,
-            log_status=_log_status,
-        )
-        terms.gas_sp_energy_kcal_mol = _format_energy_entry(
-            gas_sp_energy_kcal_mol,
-            failed_step="gxtb-sp",
-        )
+        solvation_xyz_path = scratch_dir / "alpb_opt.xyz"
+        shutil.copy2(active_xyz_path, solvation_xyz_path)
 
-        _progress("computing solvation single point")
+        _progress("computing CPCM-X solvation on GFN2-xTB/ALPB geometry")
+        cpcmx_scratch = scratch_dir / "cpcmx"
+        cpcmx_xyz_path = _prepare_scratch_xyz(cpcmx_scratch, solvation_xyz_path, "input.xyz")
         solvation_free_energy_kcal_mol = run_cpcmx_single_point(
-            scratch_dir=scratch_dir,
-            xyz_path=active_xyz_path,
+            scratch_dir=cpcmx_scratch,
+            xyz_path=cpcmx_xyz_path,
             xtb_executable=xtb_executable,
             solvent=solvent,
             charge=charge,
@@ -1317,18 +1493,70 @@ def _run_single_conformer_workflow(
             failed_step="solvation",
         )
 
-        _progress("computing RRHO contribution with xTB frequencies")
-        gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, _ = run_hessian_and_parse_energies(
-            scratch_dir=scratch_dir,
-            xyz_path=active_xyz_path,
-            xtb_executable=xtb_executable,
-            charge=charge,
-            gfn=gfn,
-            timeout_s=timeout_s,
-            dry_run=dry_run,
-            log_paths=log_paths,
-            run_command=_run,
-            log_status=_log_status,
+        gas_sp_energy_kcal_mol: Optional[float] = None
+        gxtb_refinement = GxtbRefinementResult(gas_sp_energy_kcal_mol=None)
+        gas_sp_energy_xtb_kcal_mol: Optional[float] = None
+        rrho_contribution_kcal_mol: Optional[float] = None
+        try:
+            gxtb_scratch = scratch_dir / "gxtb_refine"
+            gxtb_alpb_xyz_path = _prepare_scratch_xyz(gxtb_scratch, solvation_xyz_path, "alpb_input.xyz")
+
+            _progress("computing g-xTB gas-phase single point on GFN2-xTB/ALPB geometry")
+            run_gxtb_sp = _resolve_gxtb_single_point_runner(xtb_version)
+            gas_sp_energy_kcal_mol, _ = run_gxtb_sp(
+                scratch_dir=gxtb_scratch,
+                xyz_path=gxtb_alpb_xyz_path,
+                xtb_executable=xtb_executable,
+                charge=charge,
+                timeout_s=timeout_s,
+                dry_run=dry_run,
+                log_paths=log_paths,
+                run_command=_run,
+                log_status=_log_status,
+            )
+
+            gxtb_refinement = _try_gxtb_gas_phase_refinement(
+                protomer=protomer,
+                mol=mol,
+                input_xyz_path=gxtb_alpb_xyz_path,
+                gas_sp_energy_kcal_mol=gas_sp_energy_kcal_mol,
+                scratch_dir=gxtb_scratch,
+                xtb_executable=xtb_executable,
+                xtb_version=xtb_version,
+                opt_level=opt_level,
+                charge=charge,
+                dry_run=dry_run,
+                timeout_s=timeout_s,
+                log_paths=log_paths,
+                progress_callback=progress_callback,
+            )
+            gas_sp_energy_kcal_mol = gxtb_refinement.gas_sp_energy_kcal_mol
+
+            if gxtb_refinement.gxtb_freq_xyz_path is not None:
+                _progress("computing RRHO contribution with xTB frequencies at g-xTB geometry")
+            else:
+                _progress("computing RRHO contribution with xTB frequencies at GFN2-xTB/ALPB geometry")
+            gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, _ = _try_hessian_with_fallback(
+                primary_xyz_path=gxtb_refinement.gxtb_freq_xyz_path,
+                fallback_xyz_path=solvation_xyz_path,
+                scratch_dir=scratch_dir,
+                xtb_executable=xtb_executable,
+                charge=charge,
+                gfn=gfn,
+                dry_run=dry_run,
+                timeout_s=timeout_s,
+                log_paths=log_paths,
+            )
+        except Exception as exc:
+            _log_status(
+                log_paths,
+                "WARN",
+                f"g-xTB gas-phase or frequency steps failed after CPCM-X solvation: {exc}",
+            )
+
+        terms.gas_sp_energy_kcal_mol = _format_energy_entry(
+            gas_sp_energy_kcal_mol,
+            failed_step="gxtb-sp",
         )
         terms.gas_sp_energy_xtb_kcal_mol = _format_energy_entry(
             gas_sp_energy_xtb_kcal_mol,
@@ -1362,14 +1590,18 @@ def _run_single_conformer_workflow(
             )
             terms.workflow_status = "partial-failed"
 
-        return ConformerWorkflowResult(terms=terms, opt_xyz_path=active_xyz_path)
+        return ConformerWorkflowResult(terms=terms, opt_xyz_path=solvation_xyz_path)
     except Exception as exc:
         _log_status(log_paths, "FAIL", f"single-conformer workflow failed: {exc}")
         terms.workflow_status = "optimization-failed"
-        terms.gas_sp_energy_kcal_mol = _format_energy_entry(None, failed_step="optimization")
-        terms.solvation_free_energy_kcal_mol = _format_energy_entry(None, failed_step="optimization")
-        terms.rrho_contribution_kcal_mol = _format_energy_entry(None, failed_step="optimization")
-        terms.solution_phase_free_energy_kcal_mol = _format_energy_entry(None, failed_step="optimization")
+        if terms.solvation_free_energy_kcal_mol == "not-run":
+            terms.solvation_free_energy_kcal_mol = _format_energy_entry(None, failed_step="optimization")
+        if terms.gas_sp_energy_kcal_mol == "not-run":
+            terms.gas_sp_energy_kcal_mol = _format_energy_entry(None, failed_step="optimization")
+        if terms.rrho_contribution_kcal_mol == "not-run":
+            terms.rrho_contribution_kcal_mol = _format_energy_entry(None, failed_step="optimization")
+        if terms.solution_phase_free_energy_kcal_mol == "not-run":
+            terms.solution_phase_free_energy_kcal_mol = _format_energy_entry(None, failed_step="optimization")
         return ConformerWorkflowResult(terms=terms, opt_xyz_path=None)
 
 
@@ -1399,10 +1631,12 @@ def run_protomer_screening(
 
     Steps:
     1) Build/choose an initial KDG conformer geometry.
-    2) Run GFN2-xTB geometry optimization in implicit solvent.
-    3) Run g-xTB gas-phase single point on the optimized geometry.
-    4) Run CPCM-X solvation and xTB Hessian (RRHO) on the optimized geometry.
-    5) Compute screening solution-phase free energy.
+    2) Run GFN2-xTB geometry optimization in implicit solvent (ALPB).
+    3) Run CPCM-X solvation on the GFN2-xTB/ALPB geometry.
+    4) Run g-xTB gas-phase single point on the ALPB geometry.
+    5) Re-optimize at g-xTB gas phase and recalculate g-xTB SP when possible (fallback: step 4).
+    6) Run xTB Hessian (RRHO) on the g-xTB geometry when valid, else GFN2-xTB/ALPB.
+    7) Compute screening solution-phase free energy.
     """
     def _progress(message: str) -> None:
         if progress_callback is not None:
@@ -1602,8 +1836,9 @@ def run_protomer_solvation(
     Conformer-refinement workflow for protomers that pass screening.
 
     Generates a KDG conformer ensemble ranked by MMFF94, prunes redundant
-    geometries (dihedral/RMSD plus connectivity), runs GFN2-xTB/CPCM-X
-    optimization plus g-xTB SP/solvation/frequencies on up to 10 conformers,
+    geometries (dihedral/RMSD plus connectivity), runs GFN2-xTB/ALPB optimization,
+    CPCM-X solvation on the ALPB geometry, g-xTB gas-phase re-optimization (SP/freq
+    when valid), and RRHO with g-xTB/ALPB fallback for up to 10 conformers,
     merges the screening conformer into the pool, prunes optimized structures
     again (dihedrals from xyz2mol connectivity, XYZ RMSD fallback), and
     Boltzmann-weights the surviving conformer solution-phase energies.
