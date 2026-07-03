@@ -43,31 +43,77 @@ plt.savefig('f_zwit_scatter.png', dpi=300, bbox_inches='tight')
 # Plot exp't Kz vs predicted Kz
 # Plot the log10 transform.
 # if Kz is 0, drop it
-KZ_exp = np.log10(df['experimental_f_zwit'] / (1 - df['experimental_f_zwit']))
-KZ_pred = np.log10(df['predicted_f_zwit'] / (1 - df['predicted_f_zwit']))
+fz_exp = df['experimental_f_zwit'].to_numpy()
+fz_pred = df['predicted_f_zwit'].to_numpy()
+with np.errstate(divide='ignore', invalid='ignore'):
+    KZ_exp = np.log10(fz_exp / (1 - fz_exp))
+    KZ_pred = np.log10(fz_pred / (1 - fz_pred))
 valid = np.isfinite(KZ_exp) & np.isfinite(KZ_pred)
 kz_exp_valid = KZ_exp[valid]
 kz_pred_valid = KZ_pred[valid]
+df_valid = df.loc[valid].reset_index(drop=True)
+
+log10_kz_equal = 0.0
+uncharged_region = (kz_exp_valid < log10_kz_equal) & (kz_pred_valid < log10_kz_equal)
+zwitterion_region = (kz_exp_valid > log10_kz_equal) & (kz_pred_valid > log10_kz_equal)
+outside_region = ~(uncharged_region | zwitterion_region)
+
+print(f"Points outside highlighted quadrants: {outside_region.sum()} / {len(kz_exp_valid)}")
+for idx in np.where(outside_region)[0]:
+    molecule = df_valid.iloc[idx]['molecule'] if 'molecule' in df_valid.columns else idx
+    print(
+        f"  {molecule}: "
+        f"exp log10(K_zwit)={kz_exp_valid[idx]:.4f}, "
+        f"pred log10(K_zwit)={kz_pred_valid[idx]:.4f}"
+    )
 
 fig, ax = plt.subplots(figsize=(7, 6))
 fig.patch.set_alpha(0)
 ax.patch.set_alpha(0)
-ax.scatter(kz_exp_valid, kz_pred_valid, c='red', label='Kz')
+
+xmin_k = np.min((np.min(kz_exp_valid - 1), np.min(kz_pred_valid - 1)))
+xmax_k = np.max((np.max(kz_exp_valid + 1), np.max(kz_pred_valid + 1)))
+ax.set_xlim(xmin_k, xmax_k)
+ax.set_ylim(xmin_k, xmax_k)
+
+# Quadrants split at log10(K_zwit) = 0 (K_zwit = 1, equal tautomer proportions).
+ax.add_patch(
+    plt.Rectangle(
+        (xmin_k, xmin_k),
+        log10_kz_equal - xmin_k,
+        log10_kz_equal - xmin_k,
+        facecolor='#fd8d3c',
+        alpha=0.18,
+        edgecolor='none',
+        zorder=0,
+    )
+)
+ax.add_patch(
+    plt.Rectangle(
+        (log10_kz_equal, log10_kz_equal),
+        xmax_k - log10_kz_equal,
+        xmax_k - log10_kz_equal,
+        facecolor='#fd8d3c',
+        alpha=0.18,
+        edgecolor='none',
+        zorder=0,
+    )
+)
+ax.axvline(log10_kz_equal, color='gray', lw=0.8, alpha=0.5, zorder=1)
+ax.axhline(log10_kz_equal, color='gray', lw=0.8, alpha=0.5, zorder=1)
+
+ax.scatter(kz_exp_valid, kz_pred_valid, c='red', label='Kz', zorder=3)
 ax.set_xlabel(r'Experimental $\log_{10}$ $K_{\mathrm{zwit}}$', fontsize=20)
 ax.set_ylabel(r'Predicted $\log_{10}$ $K_{\mathrm{zwit}}$', fontsize=20)
 ax.tick_params(axis='both', which='major', labelsize=20)
 
-xmin_k = np.min((np.min(kz_exp_valid - 1), np.min(kz_pred_valid - 1)))
-xmax_k = np.max((np.max(kz_exp_valid + 1), np.max(kz_pred_valid + 1)))
-ax.plot([xmin_k, xmax_k], [xmin_k, xmax_k], 'k--', lw=1)
-ax.set_xlim(xmin_k, xmax_k)
-ax.set_ylim(xmin_k, xmax_k)
+ax.plot([xmin_k, xmax_k], [xmin_k, xmax_k], 'k--', lw=1, zorder=2)
 
 # highlight y=x+/-1 line from parity line, y=x+/-2 line
-ax.plot([xmin_k, xmax_k], [xmin_k + 1, xmax_k + 1], 'k--', lw=1, alpha=0.5)
-ax.plot([xmin_k, xmax_k], [xmin_k - 1, xmax_k - 1], 'k--', lw=1, alpha=0.5)
-ax.plot([xmin_k, xmax_k], [xmin_k + 2, xmax_k + 2], 'k--', lw=1, alpha=0.2)
-ax.plot([xmin_k, xmax_k], [xmin_k - 2, xmax_k - 2], 'k--', lw=1, alpha=0.2)
+ax.plot([xmin_k, xmax_k], [xmin_k + 1, xmax_k + 1], 'k--', lw=1, alpha=0.5, zorder=2)
+ax.plot([xmin_k, xmax_k], [xmin_k - 1, xmax_k - 1], 'k--', lw=1, alpha=0.5, zorder=2)
+ax.plot([xmin_k, xmax_k], [xmin_k + 2, xmax_k + 2], 'k--', lw=1, alpha=0.2, zorder=2)
+ax.plot([xmin_k, xmax_k], [xmin_k - 2, xmax_k - 2], 'k--', lw=1, alpha=0.2, zorder=2)
 
 ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{int(x)}'))
