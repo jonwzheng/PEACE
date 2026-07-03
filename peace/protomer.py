@@ -520,6 +520,12 @@ class Species:
         solvation_props = [
             "conformer_energy_kcal_mol",
             "conformer_delta_kcal_mol",
+            "conformer_qm_count",
+            "conformer_gas_sp_energy_kcal_mol_list",
+            "conformer_gas_sp_energy_xtb_kcal_mol_list",
+            "conformer_solvation_free_energy_kcal_mol_list",
+            "conformer_rrho_contribution_kcal_mol_list",
+            "conformer_solution_phase_free_energy_kcal_mol_list",
             "solvation_free_energy_kcal_mol",
             "solvation_free_energy_cpcmx_kcal_mol",
             "gas_sp_energy_kcal_mol",
