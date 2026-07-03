@@ -117,14 +117,6 @@ def _wrap_dihedral_delta_deg(delta: float) -> float:
     return abs(wrapped)
 
 
-def _ensure_ring_info(mol: Chem.Mol) -> None:
-    """Initialize RingInfo before IsInRing(), MMFF, or rotatable-bond queries."""
-    if mol.GetNumAtoms() == 0:
-        return
-    mol.UpdatePropertyCache(strict=False)
-    Chem.GetSSSR(mol)
-
-
 def _iter_rotatable_dihedral_quads(mol_h: Chem.Mol) -> list[tuple[int, int, int, int]]:
     quads: list[tuple[int, int, int, int]] = []
     for bond in mol_h.GetBonds():
@@ -221,7 +213,6 @@ def _kdg_embed_parameters(*, random_seed: int) -> AllChem.EmbedParameters:
 
 def _mmff94_conformer_energy_kcal_mol(mol_h: Chem.Mol, conf_id: int) -> Optional[float]:
     try:
-        _ensure_ring_info(mol_h)
         mmff_props = AllChem.MMFFGetMoleculeProperties(mol_h, mmffVariant="MMFF94")
         if mmff_props is None:
             return None
@@ -247,7 +238,6 @@ def _mol_from_xyz_with_connectivity(xyz_path: Path) -> Optional[Chem.Mol]:
     if mol is None or mol.GetNumConformers() == 0:
         return None
     rdDetermineBonds.DetermineConnectivity(mol)
-    _ensure_ring_info(mol)
     return mol
 
 
@@ -358,7 +348,6 @@ def _screening_opt_xyz_path(protomer: Protomer) -> Optional[Path]:
 
 def _embed_kdg_conformer(mol: Chem.Mol, *, random_seed: int = 42) -> Chem.Mol:
     mol_h = Chem.AddHs(Chem.Mol(mol))
-    _ensure_ring_info(mol_h)
     params = _kdg_embed_parameters(random_seed=random_seed)
     conf_id = AllChem.EmbedMolecule(mol_h, params)
     if conf_id < 0:
@@ -375,7 +364,6 @@ def _generate_kdg_conformer_ensemble(
     max_conformers: int = REFINEMENT_MAX_EMBED_CONFORMERS,
 ) -> tuple[Chem.Mol, list[int]]:
     mol_h = Chem.AddHs(Chem.Mol(mol))
-    _ensure_ring_info(mol_h)
     params = _kdg_embed_parameters(random_seed=random_seed)
     n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
     n_confs = max(int(min_conformers), min(2 ** n_rotatable_bonds, int(max_conformers)))
@@ -753,80 +741,6 @@ class ConformerSearchResult:
     best_energy_kcal_mol: float
     best_conf_id: int
     conformer_energies_kcal_mol: dict[int, float]
-
-
-def _search_conformers_rdkit_mmff94(
-    mol: Chem.Mol,
-    *,
-    random_seed: int = 42,
-    mmff_max_iters: int = 1000,
-    max_conformers: Optional[int] = None,
-) -> ConformerSearchResult:
-    """
-    Generate conformers with RDKit ETKDG and rank by MMFF94 energy.
-
-    Returns the lowest-MMFF-energy structure plus per-conformer energies for
-    optional downstream ensemble averaging.
-    """
-    if mol is None:
-        raise ValueError("mol is None")
-
-    mol_in = Chem.Mol(mol)
-    mol_h = Chem.AddHs(mol_in, addCoords=False)
-    _ensure_ring_info(mol_h)
-
-    params = AllChem.ETKDGv3()
-    params.randomSeed = int(random_seed)
-    params.numThreads = 0
-    params.useExpTorsionAnglePrefs = False # better for liq. phase
-
-    n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
-    n_confs = min(50, 2 ** n_rotatable_bonds, 500) 
-    if max_conformers is not None:
-        n_confs = min(int(n_confs), int(max_conformers))
-    conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
-    if not conf_ids:
-        raise RuntimeError("RDKit conformer embedding produced no conformers.")
-
-    best_energy = float("inf")
-    best_conf_id = conf_ids[0]
-    conformer_energies: dict[int, float] = {}
-
-    for conf_id in conf_ids:
-        status = AllChem.MMFFOptimizeMolecule(
-            mol_h,
-            mmffVariant="MMFF94",
-            maxIters=int(mmff_max_iters),
-            confId=int(conf_id),
-        )
-        if status == -1:
-            continue
-
-        mmff_props = AllChem.MMFFGetMoleculeProperties(mol_h, mmffVariant="MMFF94")
-        if mmff_props is None:
-            raise RuntimeError("MMFF94 molecule properties could not be created.")
-        ff = AllChem.MMFFGetMoleculeForceField(mol_h, mmff_props, confId=int(conf_id))
-        ff.Initialize()
-        energy = float(ff.CalcEnergy())
-        conformer_energies[int(conf_id)] = energy
-        if energy < best_energy:
-            best_energy = energy
-            best_conf_id = int(conf_id)
-
-    if not conformer_energies:
-        raise RuntimeError("MMFF94 optimization failed for all embedded conformers.")
-
-    mol_best_h = Chem.Mol(mol_h)
-    mol_best_h.RemoveAllConformers()
-    mol_best_h.AddConformer(mol_h.GetConformer(best_conf_id), assignId=True)
-    mol_no_h = Chem.RemoveHs(mol_best_h)
-
-    return ConformerSearchResult(
-        mol=mol_no_h,
-        best_energy_kcal_mol=best_energy,
-        best_conf_id=best_conf_id,
-        conformer_energies_kcal_mol=conformer_energies,
-    )
 
 
 ProtomerRef = tuple[int, int, Protomer]
@@ -1748,7 +1662,6 @@ def run_protomer_solvation(
         graph_mol = Chem.MolFromSmiles(protomer.smiles)
         if graph_mol is None:
             raise ValueError(f"Could not rebuild 3D graph from SMILES: {protomer.smiles}")
-        _ensure_ring_info(graph_mol)
 
         _progress("generating KDG conformer ensemble")
         mol_h, ranked_conf_ids = _generate_kdg_conformer_ensemble(
