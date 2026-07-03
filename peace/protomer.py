@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from rdkit.Chem import AllChem, Mol
-from .common import protonate_at_site, deprotonate_at_site, extract_matches_from_smarts_collection, canon_smiles
+from .common import (
+    protonate_at_site,
+    deprotonate_at_site,
+    extract_matches_from_smarts_collection,
+    canon_smiles,
+    canonicalize_atom_order,
+)
 
 import copy
 import itertools
@@ -114,6 +120,8 @@ class SpeciesProtomerRegistry:
 class Protomer:
     def __init__(self, smiles: str = "", mol: Mol = None):
         self.smiles = canon_smiles(smiles)
+        if mol is not None:
+            mol = canonicalize_atom_order(mol)
         self.mol = mol
         # Keep a copy of the pre-optimization/input molecular graph for display/export.
         self.input_mol = copy.deepcopy(mol) if mol is not None else None
@@ -246,8 +254,9 @@ class Tautomer:
             deprotonate_at_site(mol, acidic_idx)
 
             new_smiles = canon_smiles(AllChem.MolToSmiles(mol))
-            new_protomer = Protomer.from_mol(mol)
-            if new_protomer.smiles != new_smiles:
+            canon_mol, idx_map = canonicalize_atom_order(mol, return_index_map=True)
+            new_protomer = Protomer(new_smiles or AllChem.MolToSmiles(canon_mol), canon_mol)
+            if new_protomer.smiles != new_smiles and new_smiles is not None:
                 warnings.warn(
                     f"Protomer SMILES mismatch after protonation/deprotonation: "
                     f"expected={new_smiles}, actual={new_protomer.smiles}. "
@@ -258,7 +267,10 @@ class Tautomer:
 
             # keep historical ionization-site highlights across iterative generations.
             prior_sites = seed_protomer.ionization_sites if seed_protomer.ionization_sites else []
-            new_protomer.ionization_sites = list(dict.fromkeys(prior_sites + [basic_idx, acidic_idx]))
+            touched_sites = prior_sites + [basic_idx, acidic_idx]
+            new_protomer.ionization_sites = list(
+                dict.fromkeys(idx_map.get(site, site) for site in touched_sites)
+            )
             if self.embed_protomer(
                 new_protomer,
                 species_registry=species_registry,

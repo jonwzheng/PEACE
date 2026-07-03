@@ -122,6 +122,39 @@ def show_images(imgs: list, buffer: int = 6, mode = "vertical", save_path=None):
     else:
         res.show()
 
+def canonicalize_atom_order(
+    mol: Mol | None,
+    *,
+    return_index_map: bool = False,
+) -> Mol | None | tuple[Mol | None, dict[int, int]]:
+    """
+    Return a copy of ``mol`` with RDKit canonical atom ordering.
+
+    Uses a canonical SMILES round-trip so equivalent SMILES drawings share the
+    same atom index map before 3D embedding or QM workflows run.
+    """
+    if mol is None:
+        return (None, {}) if return_index_map else None
+
+    if return_index_map:
+        mapped = Chem.Mol(mol)
+        for atom_idx, atom in enumerate(mapped.GetAtoms()):
+            atom.SetAtomMapNum(atom_idx + 1)
+        smiles = Chem.MolToSmiles(mapped, canonical=True)
+        canon = Chem.MolFromSmiles(smiles)
+        if canon is None:
+            return None, {}
+        old_to_new: dict[int, int] = {}
+        for atom in canon.GetAtoms():
+            old_idx = atom.GetAtomMapNum() - 1
+            if old_idx >= 0:
+                old_to_new[old_idx] = atom.GetIdx()
+                atom.SetAtomMapNum(0)
+        return canon, old_to_new
+
+    return Chem.MolFromSmiles(Chem.MolToSmiles(mol, canonical=True))
+
+
 def canon_smiles(smiles: str) -> str:
     """
     Canonicalize a SMILES string.
