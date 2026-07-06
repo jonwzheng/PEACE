@@ -158,8 +158,23 @@ def _build_cli_parser():
     p.add_argument(
         "--screen-threshold",
         type=float,
-        default=15.0,
+        default=30.0,
         help="Exclude protomers from conformer refinement if xTB screening delta exceeds energy threshold (kcal/mol).",
+    )
+    p.add_argument(
+        "--max-conformers",
+        type=int,
+        default=5,
+        help="Maximum number of conformers to sample for QM refinement (lowest MMFF94 within energy window).",
+    )
+    p.add_argument(
+        "--conformer-energy-threshold",
+        type=float,
+        default=10.0,
+        help=(
+            "MMFF94 energy window (kcal/mol above the lowest embedded conformer) for conformer sampling "
+            "during refinement."
+        ),
     )
     p.add_argument(
         "--exclude-unconverged",
@@ -786,6 +801,7 @@ if __name__ == "__main__":
 
     if args.solvation:
         from peace.solvation import (
+            _workflow_log_prefix,
             run_batch_conformer_generation,
             run_protomer_screening,
             run_protomer_solvation,
@@ -847,16 +863,18 @@ if __name__ == "__main__":
                     progress_callback=lambda stage: _log(f"  [conformers] {stage}"),
                 )
 
-                _log(f" *** SCREENING PROTOMERS (charge={charge_state}) WITH GFN2-xTB... *** ")
+                _log(f" *** SCREENING PROTOMERS (charge={charge_state}) ON KDG GEOMETRIES... *** ")
                 screening_records: list[tuple[int, int, Any, Optional[float]]] = []
                 for taut_idx, prot_idx, protomer in all_protomer_refs:
                     n_prot = len(spec.tautomers[taut_idx].protomers)
-                    prefix = (
-                        f"charge {charge_state:+d} "
-                        f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
-                        f"protomer {prot_idx + 1}/{n_prot}"
+                    prefix = _workflow_log_prefix(
+                        charge_state,
+                        taut_idx,
+                        len(tautomer_items),
+                        prot_idx,
+                        n_prot,
                     )
-                    _log(f"Screening {prefix}")
+                    _log(f"Screening [{prefix}]")
                     screening_result = run_protomer_screening(
                         protomer,
                         protomer_id=f"{prot_idx}_screen",
@@ -908,12 +926,14 @@ if __name__ == "__main__":
                 _log(" *** CONFORMER REFINEMENT FOR SCREENED-IN PROTOMERS ***")
                 for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
                     protomer_items = list(spec.tautomers[taut_idx].protomers.items())
-                    prefix = (
-                        f"charge {charge_state:+d} "
-                        f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
-                        f"protomer {prot_idx + 1}/{len(protomer_items)}"
+                    prefix = _workflow_log_prefix(
+                        charge_state,
+                        taut_idx,
+                        len(tautomer_items),
+                        prot_idx,
+                        len(protomer_items),
                     )
-                    _log(f"Refining conformers for {prefix}")
+                    _log(f"Refining conformers [{prefix}]")
                     run_protomer_solvation(
                         protomer,
                         protomer_id=str(prot_idx),
@@ -928,7 +948,10 @@ if __name__ == "__main__":
                         xtb_executable=args.xtb_executable,
                         dry_run=bool(args.dry_run),
                         opt_level=args.opt_level,
-                        progress_callback=lambda stage, prefix=prefix: _log(f"  [{prefix}] {stage}"),
+                        max_qm_conformers=int(args.max_conformers),
+                        conformer_energy_threshold_kcal_mol=float(args.conformer_energy_threshold),
+                        log_prefix=prefix,
+                        progress_callback=lambda stage: _log(f"  {stage}"),
                     )
         
 
