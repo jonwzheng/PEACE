@@ -152,8 +152,9 @@ def _build_cli_parser():
         default="water",
         help=(
             "Solvent for GFN2-xTB/ALPB optimization and CPCM-X solvation. "
-            "Must be supported by both data/allowed_solvents.txt (ALPB) and "
-            "data/cpcm_allowed_solvents.txt (CPCM-X)."
+            "Must be supported by data/allowed_solvents.txt (ALPB), "
+            "data/cpcm_allowed_solvents.txt (CPCM-X aliases), and "
+            "data/cpcm_internal_solvent_names.txt (xTB CPCM-X flag names)."
         ),
     )
     p.add_argument(
