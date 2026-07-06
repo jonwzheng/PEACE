@@ -48,8 +48,9 @@ def _build_cli_parser():
         default="default",
         choices=["default", "cutoff", "count"],
         help=(
-            "Protomer plot mode: all protomer/tautomer pairs (default), "
-            "Boltzmann fraction cutoff (cutoff), or lowest-energy top-N (count)."
+            "Protomer plot mode: plot all protomers when <=5, otherwise >=0.01%% "
+            "Boltzmann fraction (default), explicit fraction cutoff (cutoff), or "
+            "lowest-energy top-N (count)."
         ),
     )
     p.add_argument(

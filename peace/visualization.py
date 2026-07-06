@@ -28,6 +28,8 @@ _CELL_PAD = 6
 _GRID_GAP = 2
 _TITLE_HEIGHT = 32
 _HIGHLIGHT_MAX_RANK = 5  # highlight population ranks 0 .. 4
+_DEFAULT_MAX_PLOT_COUNT = 5
+_DEFAULT_POPULATION_CUTOFF = 0.0001  # 0.01% Boltzmann fraction
 _HIGHLIGHT_COLOR = (0, 105, 75)
 _POP_BAR_COLOR = (0, 105, 75)
 _POP_BAR_TRACK_COLOR = (230, 234, 236)
@@ -252,7 +254,16 @@ def filter_plot_entries(
     plot_filter: Optional[float] = None,
 ) -> list[ProtomerPlotEntry]:
     if mode == "default":
-        return list(entries)
+        if len(entries) <= _DEFAULT_MAX_PLOT_COUNT:
+            return list(entries)
+        if not any(e.boltzmann_fraction is not None for e in entries):
+            return list(entries)
+        return [
+            e
+            for e in entries
+            if e.boltzmann_fraction is not None
+            and e.boltzmann_fraction >= _DEFAULT_POPULATION_CUTOFF
+        ]
 
     if mode == "cutoff":
         if plot_filter is None:
