@@ -74,7 +74,7 @@ def run_xtb_optimization(
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
         f"{input_flag} "
         f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)} "
-        f"--charge {shlex.quote(str(charge))}"
+        f"--chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
     cp_opt = run_command(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)

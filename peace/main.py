@@ -76,9 +76,9 @@ def _build_cli_parser():
     p.add_argument(
         "--conformer-mode",
         type=str,
-        default="mmff94",
-        choices=["mmff94", "external_xyz", "skip_search"],
-        help="Conformer geometry input for xTB runs.",
+        default="kdg",
+        choices=["kdg", "mmff94", "external_xyz", "skip_search"],
+        help="Initial 3D geometry source: KDG embedding (default), external xyz, or skip_search.",
     )
     p.add_argument("--external-xyz", type=str, default=None, help="Path to external xyz (used only with conformer-mode=external_xyz).")
     p.add_argument(
@@ -125,11 +125,8 @@ def _build_cli_parser():
     p.add_argument(
         "--gxtb-post-optimize",
         type=bool,
-        default=True,
-        help=(
-            "Run a g-xTB geometry optimization (--opt) in the post-screen stage."
-            "Enabled by default."
-        ),
+        default=False,
+        help="Deprecated; g-xTB geometry optimization is no longer used in the post-screen stage.",
     )
     p.add_argument(
         "--xtb-version",
@@ -161,8 +158,23 @@ def _build_cli_parser():
     p.add_argument(
         "--screen-threshold",
         type=float,
-        default=15.0,
-        help="Exclude protomers from full post-screen optimization if xTB screening delta exceeds energy threshold (kcal/mol).",
+        default=30.0,
+        help="Exclude protomers from conformer refinement if xTB screening delta exceeds energy threshold (kcal/mol).",
+    )
+    p.add_argument(
+        "--max-conformers",
+        type=int,
+        default=5,
+        help="Maximum number of conformers to sample for QM refinement (lowest MMFF94 within energy window).",
+    )
+    p.add_argument(
+        "--conformer-energy-threshold",
+        type=float,
+        default=10.0,
+        help=(
+            "MMFF94 energy window (kcal/mol above the lowest embedded conformer) for conformer sampling "
+            "during refinement."
+        ),
     )
     p.add_argument(
         "--exclude-unconverged",
@@ -789,6 +801,7 @@ if __name__ == "__main__":
 
     if args.solvation:
         from peace.solvation import (
+            _workflow_log_prefix,
             run_batch_conformer_generation,
             run_protomer_screening,
             run_protomer_solvation,
@@ -850,16 +863,18 @@ if __name__ == "__main__":
                     progress_callback=lambda stage: _log(f"  [conformers] {stage}"),
                 )
 
-                _log(f" *** SCREENING PROTOMERS (charge={charge_state}) WITH GFN2-xTB... *** ")
+                _log(f" *** SCREENING PROTOMERS (charge={charge_state}) ON KDG GEOMETRIES... *** ")
                 screening_records: list[tuple[int, int, Any, Optional[float]]] = []
                 for taut_idx, prot_idx, protomer in all_protomer_refs:
                     n_prot = len(spec.tautomers[taut_idx].protomers)
-                    prefix = (
-                        f"charge {charge_state:+d} "
-                        f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
-                        f"protomer {prot_idx + 1}/{n_prot}"
+                    prefix = _workflow_log_prefix(
+                        charge_state,
+                        taut_idx,
+                        len(tautomer_items),
+                        prot_idx,
+                        n_prot,
                     )
-                    _log(f"Screening {prefix}")
+                    _log(f"Screening [{prefix}]")
                     screening_result = run_protomer_screening(
                         protomer,
                         protomer_id=f"{prot_idx}_screen",
@@ -908,20 +923,17 @@ if __name__ == "__main__":
                     f"threshold={float(args.screen_threshold):.2f} kcal/mol"
                 )
 
-                _log(" *** REFINING SCREENED PROTOMERS WITH g-xTB... ***")
+                _log(" *** CONFORMER REFINEMENT FOR SCREENED-IN PROTOMERS ***")
                 for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
                     protomer_items = list(spec.tautomers[taut_idx].protomers.items())
-                    prefix = (
-                        f"charge {charge_state:+d} "
-                        f"tautomer {taut_idx + 1}/{len(tautomer_items)} "
-                        f"protomer {prot_idx + 1}/{len(protomer_items)}"
+                    prefix = _workflow_log_prefix(
+                        charge_state,
+                        taut_idx,
+                        len(tautomer_items),
+                        prot_idx,
+                        len(protomer_items),
                     )
-                    if (
-                        args.optimization_engine == args.sp_energy
-                    ):
-                        _log(f"!! Optimization and SP engines are the same !!")
-                    else:
-                        _log(f"Refining {prefix}")
+                    _log(f"Refining conformers [{prefix}]")
                     run_protomer_solvation(
                         protomer,
                         protomer_id=str(prot_idx),
@@ -932,15 +944,14 @@ if __name__ == "__main__":
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         sp_energy=args.sp_energy,
-                        gxtb_post_optimize=bool(args.gxtb_post_optimize),
                         xtb_version=args.xtb_version,
                         xtb_executable=args.xtb_executable,
-                        recompute_solvation=bool(args.recompute_solvation),
-                        recompute_frequencies=bool(args.recompute_frequencies),
-                        reuse_screening_terms=True,
                         dry_run=bool(args.dry_run),
                         opt_level=args.opt_level,
-                        progress_callback=lambda stage, prefix=prefix: _log(f"  [{prefix}] {stage}"),
+                        max_qm_conformers=int(args.max_conformers),
+                        conformer_energy_threshold_kcal_mol=float(args.conformer_energy_threshold),
+                        log_prefix=prefix,
+                        progress_callback=lambda stage: _log(f"  {stage}"),
                     )
         
 
@@ -953,8 +964,7 @@ if __name__ == "__main__":
                 if min_postopt_solution_energy is None:
                     _log("No valid post-optimization solution energies found to backfill screened-out protomers.")
 
-                # Backfill screened-in protomers that failed downstream (e.g., g-xTB post-opt
-                # connectivity mismatch), preserving their screening-based energy delta.
+                # Backfill screened-in protomers that failed conformer refinement.
                 for taut_idx, prot_idx, protomer, screening_energy, screen_delta in protomers_to_optimize:
                     if protomer.mol is None:
                         continue
