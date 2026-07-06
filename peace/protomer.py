@@ -550,6 +550,7 @@ class Species:
             "optimization_initial_opt_level",
             "optimization_engine",
             "connectivity_mismatch",
+            "solvent",
             "degeneracy",
             "alternate_tautomer_ids",
 #            "connectivity_mismatch_error",

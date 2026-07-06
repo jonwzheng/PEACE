@@ -147,6 +147,16 @@ def _build_cli_parser():
         help="xTB binary name or path (required with --solvation; must match --xtb-version).",
     )
     p.add_argument(
+        "--solvent",
+        type=str,
+        default="water",
+        help=(
+            "Solvent for GFN2-xTB/ALPB optimization and CPCM-X solvation. "
+            "Must be supported by both data/allowed_solvents.txt (ALPB) and "
+            "data/cpcm_allowed_solvents.txt (CPCM-X)."
+        ),
+    )
+    p.add_argument(
         "--recompute-solvation",
         action="store_true",
         help="Recompute CPCM-X solvation in post-screen stage instead of reusing screening value.",
@@ -686,6 +696,13 @@ if __name__ == "__main__":
     if args.plot_from_csv and args.no_plot:
         parser.error("--plot-from-csv cannot be combined with --no-plot")
 
+    from peace.solvents import SolventNames, resolve_solvent
+
+    try:
+        solvent = resolve_solvent(args.solvent)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     if args.plot_from_csv:
         _log(_header_banner())
         _log(f"Version: {__version__}")
@@ -721,6 +738,7 @@ if __name__ == "__main__":
     _log(f"Input SMILES: {args.smiles}")
     _log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
     _log(f"Site search mode: {args.site_search_mode}")
+    _log(f"Solvent: {solvent.alpb} (CPCM-X: {solvent.cpcm})")
     if args.only_protomer_search:
         _log("Tautomer enumeration: disabled (--only-protomer-search)")
     if args.charge_seed_first_only:
@@ -858,6 +876,7 @@ if __name__ == "__main__":
                 if only_protomer.mol is not None:
                     only_protomer.mol.SetDoubleProp("solution_phase_free_energy_kcal_mol", -10000.0)
                     only_protomer.mol.SetProp("workflow_status", "single_protomer_default_energy")
+                    only_protomer.mol.SetProp("solvent", solvent.alpb)
                 _log(
                     "Skipping solvation workflow for single-tautomer/single-protomer species "
                     f"(charge={charge_state}); assigned default solution-phase free energy = -10000.0 kcal/mol."
@@ -913,6 +932,7 @@ if __name__ == "__main__":
                         opt_level=args.opt_level,
                         xtb_version=args.xtb_version,
                         xtb_executable=args.xtb_executable,
+                        solvent=solvent,
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         dry_run=bool(args.dry_run),
@@ -974,6 +994,7 @@ if __name__ == "__main__":
                         sp_energy=args.sp_energy,
                         xtb_version=args.xtb_version,
                         xtb_executable=args.xtb_executable,
+                        solvent=solvent,
                         dry_run=bool(args.dry_run),
                         opt_level=args.opt_level,
                         max_qm_conformers=int(args.max_conformers),
@@ -1079,6 +1100,12 @@ if __name__ == "__main__":
         df = pd.concat(frames, ignore_index=True)
     else:
         df = pd.DataFrame()
+
+    if not df.empty:
+        if "solvent" in df.columns:
+            df["solvent"] = df["solvent"].fillna(solvent.alpb)
+        else:
+            df["solvent"] = solvent.alpb
 
     if args.output_csv:
         output_path = Path(args.output_csv)

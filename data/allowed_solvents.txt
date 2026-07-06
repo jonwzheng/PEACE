@@ -1,0 +1,15 @@
+acetonitrile
+aniline
+benzene
+cs2
+dmf
+dmso
+ethylacetate
+hexadecane
+hexane
+methanol
+nitromethane
+octanol
+toluene
+thf
+water

@@ -22,7 +22,7 @@ from .protomer import Species
 
 # Layout
 _MOL_SIZE = (280, 180)
-_LEGEND_HEIGHT = 108
+_LEGEND_HEIGHT = 124
 _POP_BAR_HEIGHT = 8
 _CELL_PAD = 6
 _GRID_GAP = 2
@@ -53,6 +53,7 @@ class ProtomerPlotEntry:
     workflow_status: str = ""
     workflow_error: str = ""
     connectivity_mismatch: bool = False
+    solvent: str = ""
 
 
 def _optional_float(value) -> Optional[float]:
@@ -182,6 +183,7 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
             workflow_status = ""
             workflow_error = ""
             connectivity_mismatch = False
+            solvent = ""
             if protomer.mol is not None:
                 if protomer.mol.HasProp("boltzmann_fraction"):
                     boltzmann_fraction = _optional_float(protomer.mol.GetProp("boltzmann_fraction"))
@@ -197,6 +199,8 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     workflow_error = _optional_str(protomer.mol.GetProp("workflow_error"))
                 if protomer.mol.HasProp("connectivity_mismatch"):
                     connectivity_mismatch = _optional_bool(protomer.mol.GetProp("connectivity_mismatch"))
+                if protomer.mol.HasProp("solvent"):
+                    solvent = _optional_str(protomer.mol.GetProp("solvent"))
             display_mol = protomer.input_mol if protomer.input_mol is not None else protomer.mol
             entries.append(
                 ProtomerPlotEntry(
@@ -213,6 +217,7 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     workflow_status=workflow_status,
                     workflow_error=workflow_error,
                     connectivity_mismatch=connectivity_mismatch,
+                    solvent=solvent,
                 )
             )
     return entries
@@ -243,6 +248,7 @@ def entries_from_dataframe(df: pd.DataFrame) -> list[ProtomerPlotEntry]:
                 workflow_status=_optional_str(row_dict.get("workflow_status")),
                 workflow_error=_optional_str(row_dict.get("workflow_error")),
                 connectivity_mismatch=_optional_bool(row_dict.get("connectivity_mismatch")),
+                solvent=_optional_str(row_dict.get("solvent")),
             )
         )
     return entries
@@ -390,6 +396,13 @@ def _draw_legend(
             font=font,
         )
 
+    if entry.solvent:
+        y += 18
+        _draw_labeled_value(
+            draw, 4, y, "solvent: ", entry.solvent,
+            font=font,
+        )
+
     return legend
 
 
@@ -517,6 +530,8 @@ def _panel_title(
         parts.append(f"species: {first.species_id}")
     if first.formal_charge is not None:
         parts.append(f"charge: {first.formal_charge:+d}")
+    if first.solvent:
+        parts.append(f"solvent: {first.solvent}")
     title = "  ·  ".join(parts)
 
     banner = Image.new("RGB", (width, _TITLE_HEIGHT), "#f4f6f8")

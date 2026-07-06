@@ -27,6 +27,7 @@ from .calculators import (
 )
 from .calculators.common import opt_convergence_retry_levels
 from .protomer import Protomer, Species, Tautomer
+from .solvents import SolventNames, resolve_solvent
 
 HARTREE_TO_KCAL_MOL = 627.5094740631
 KCAL_MOL_PER_K = 0.00198720425864083
@@ -691,7 +692,7 @@ def _run_xtb_optimization_with_retry(
     xtb_executable: str,
     opt_level: str,
     charge: int,
-    solvent: str,
+    alpb_solvent: str,
     timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
@@ -711,7 +712,7 @@ def _run_xtb_optimization_with_retry(
             xtb_executable=xtb_executable,
             opt_level=level,
             charge=charge,
-            solvent=solvent,
+            solvent=alpb_solvent,
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
@@ -1512,7 +1513,7 @@ def _run_screening_conformer_workflow(
     xtb_executable: str,
     xtb_version: XtbVersion,
     charge: int,
-    solvent: str,
+    solvent: SolventNames,
     gfn: int,
     dry_run: bool,
     timeout_s: Optional[int],
@@ -1544,7 +1545,7 @@ def _run_screening_conformer_workflow(
             scratch_dir=cpcmx_scratch,
             xyz_path=cpcmx_xyz_path,
             xtb_executable=xtb_executable,
-            solvent=solvent,
+            solvent=solvent.cpcm,
             charge=charge,
             gfn=gfn,
             timeout_s=timeout_s,
@@ -1657,7 +1658,7 @@ def _run_single_conformer_workflow(
     xtb_executable: str,
     xtb_version: XtbVersion,
     charge: int,
-    solvent: str,
+    solvent: SolventNames,
     gfn: int,
     opt_level: str,
     optimization_engine: Literal["xtb", "aimnet2"],
@@ -1685,7 +1686,7 @@ def _run_single_conformer_workflow(
                 xtb_executable=xtb_executable,
                 opt_level=opt_level,
                 charge=charge,
-                solvent=solvent,
+                alpb_solvent=solvent.alpb,
                 timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
@@ -1731,7 +1732,7 @@ def _run_single_conformer_workflow(
             scratch_dir=cpcmx_scratch,
             xyz_path=cpcmx_xyz_path,
             xtb_executable=xtb_executable,
-            solvent=solvent,
+            solvent=solvent.cpcm,
             charge=charge,
             gfn=gfn,
             timeout_s=timeout_s,
@@ -1851,7 +1852,7 @@ def run_protomer_screening(
     conformer_mode: ConformerMode = "kdg",
     external_xyz_path: Optional[str | Path] = None,
     charge_override: Optional[int] = None,
-    solvent: Literal["water"] = "water",
+    solvent: SolventNames | None = None,
     gfn: int = 2,
     optimization_engine: Literal["xtb", "aimnet2"] = "xtb",
     opt_level: str = "loose",
@@ -1885,10 +1886,15 @@ def run_protomer_screening(
     if protomer.mol is None:
         raise ValueError("Protomer does not have mol; cannot run screening workflow.")
     charge = int(charge_override) if charge_override is not None else _formal_charge(protomer.mol)
+    if solvent is None:
+        solvent = resolve_solvent("water")
+    _set_mol_prop_str(protomer.mol, "solvent", solvent.alpb)
     _log_status(
         log_paths,
         "START",
-        f"screening protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} conformer_mode={conformer_mode} xtb_version={xtb_version}",
+        f"screening protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} "
+        f"solvent_alpb={solvent.alpb} solvent_cpcm={solvent.cpcm} "
+        f"conformer_mode={conformer_mode} xtb_version={xtb_version}",
     )
     _progress("preparing conformer")
 
@@ -2050,7 +2056,7 @@ def run_protomer_solvation(
     external_xyz_path: Optional[str | Path] = None,
     optimization_engine: Literal["xtb", "aimnet2"] = "xtb",
     charge_override: Optional[int] = None,
-    solvent: Literal["water"] = "water",
+    solvent: SolventNames | None = None,
     gfn: int = 2,
     opt_level: str = "loose",
     sp_energy: Literal["gxtb", "xtb", "aimnet2"] = "gxtb",
@@ -2092,10 +2098,14 @@ def run_protomer_solvation(
     if protomer.mol is None:
         raise ValueError("Protomer does not have mol; cannot run conformer refinement.")
     charge = int(charge_override) if charge_override is not None else _formal_charge(protomer.mol)
+    if solvent is None:
+        solvent = resolve_solvent("water")
+    _set_mol_prop_str(protomer.mol, "solvent", solvent.alpb)
     _log_status(
         log_paths,
         "START",
-        f"conformer refinement protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge}",
+        f"conformer refinement protomer_id={protomer_id} scratch_dir={scratch_dir.name} "
+        f"charge={charge} solvent_alpb={solvent.alpb} solvent_cpcm={solvent.cpcm}",
     )
 
     conformer_energy_kcal_mol: Optional[float] = None

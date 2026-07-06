@@ -1,0 +1,93 @@
+1,2,4-trimethylbenzene
+1,2-dichloroethane
+1-butanol / butanol
+1-chlorohexane / chlorohexane
+1-decanol / decanol
+1-fluorooctane
+1-heptanol / heptanol
+1-hexanol / hexanol
+1-iodohexadecane / hexadecyliodide
+1-nonanol / nonanol
+1-octanol / octanol
+1-pentanol / pentanol
+1-propanol / propanol
+2,2,4-trimethylpentane / isooctane
+2,6-dimethylpyridine
+2-butanol / secbutanol
+2-methoxyethanol / methoxyethanol
+2-methyl-1-propanol / isobutanol
+2-methylpyridine / 2methylpyridine
+2-propanol / isopropanol
+4-methyl-2-pentanone / 4methyl2pentanone
+acetic acid / aceticacid
+acetonitrile / mecn / ch3cn
+acetophenone
+aniline
+anisole
+benzene
+benzonitrile
+benzyl alcohol / benzylalcohol
+bromobenzene
+bromoethane
+bromoform
+butanone
+butyl ethanoate / butyl acetate / butylacetate
+butylamine
+n-butylbenzene / butylbenzene
+sec-butylbenzene / secbutylbenzene
+tert-butylbenzene / tbutylbenzene
+carbon disulfide / carbondisulfide / cs2
+carbon tetrachloride / ccl4
+chlorobenzene
+chloroform / chcl3
+m-cresol / mcresol
+o-cresol
+cyclohexane
+cyclohexanone
+decalin
+n-decane / decane
+dibromomethane
+dibutylether
+o-dichlorobenzene / odichlorobenzene
+dichloromethane / ch2cl2 / dcm
+diethyl ether / diethylether
+diisopropyl ether / diisopropylether
+n,n-dimethylacetamide / dimethylacetamide
+n,n-dimethylformamide / dimethylformamide / dmf
+dimethylsulfoxide / dmso
+diphenylether
+n-dodecane / dodecane
+ethanol
+ethyl acetate / ethylacetate / ethanoate
+ethyl phenyl ether / ethoxybenzene
+ethylbenzene
+fluorobenzene
+n-heptane / heptane
+n-hexadecane / hexadecane
+n-hexane / hexane
+iodobenzene
+isopropylbenzene
+p-isopropyltoluene / isopropyltoluene
+mesitylene
+methanol
+n-methylformamide / methylformamide
+nitrobenzene / phno2
+nitroethane
+nitromethane / meno2
+o-nitrotoluene / onitrotoluene
+n-nonane / nonane
+n-octane / octane
+n-pentadecane / pentadecane
+n-pentane / pentane
+perfluorobenzene / hexafluorobenzene
+pyridine
+tetrachloroethene / c2cl4
+tetrahydrofuran / thf
+tetrahydrothiophene-s,s-dioxide // tetrahydrothiophenedioxide / sulfolane
+tetralin
+toluene
+tributylphosphate
+triethylamine
+n-undecane / undecane
+water / h2o
+xylene
