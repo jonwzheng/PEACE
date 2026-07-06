@@ -204,6 +204,15 @@ def _build_cli_parser():
         ),
     )
     p.add_argument(
+        "--only-protomer-search",
+        action="store_true",
+        help=(
+            "Skip RDKit tautomer enumeration and operate on the input structure as a "
+            "single tautomer while still searching protomers with the selected "
+            "site-search mode."
+        ),
+    )
+    p.add_argument(
         "--max-seed-rounds",
         type=int,
         default=None,
@@ -234,8 +243,16 @@ def _build_cli_parser():
     return p
 
 
-def _make_species(smiles: str, *, engine: ChargeEngine) -> Species:
+def _make_species(
+    smiles: str,
+    *,
+    engine: ChargeEngine,
+    only_protomer_search: bool = False,
+) -> Species:
     spec = Species.from_smiles(smiles)
+    if only_protomer_search:
+        return spec
+
     tautomers = engine.search_for_tautomers(spec)
     spec.embed_tautomers_from_list_of_smiles(tautomers)
 
@@ -526,6 +543,7 @@ def _seed_adjacent_charge_species(
     charge_step: int,
     site_search_mode: str,
     charge_seed_first_only: bool = False,
+    only_protomer_search: bool = False,
 ) -> Optional[Species]:
     if charge_step not in (-1, 1):
         raise ValueError("charge_step must be -1 or +1")
@@ -565,12 +583,13 @@ def _seed_adjacent_charge_species(
         return None
 
     spec = _species_from_tautomers(new_tautomers)
-    added_tautomers = _discover_missing_tautomers(spec, engine=engine)
-    if added_tautomers:
-        _log(
-            f"  Tautomer enumeration added {added_tautomers} structural tautomer(s) "
-            f"not present in the per-tautomer charge-shift pool"
-        )
+    if not only_protomer_search:
+        added_tautomers = _discover_missing_tautomers(spec, engine=engine)
+        if added_tautomers:
+            _log(
+                f"  Tautomer enumeration added {added_tautomers} structural tautomer(s) "
+                f"not present in the per-tautomer charge-shift pool"
+            )
     return spec
 
 
@@ -702,6 +721,8 @@ if __name__ == "__main__":
     _log(f"Input SMILES: {args.smiles}")
     _log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
     _log(f"Site search mode: {args.site_search_mode}")
+    if args.only_protomer_search:
+        _log("Tautomer enumeration: disabled (--only-protomer-search)")
     if args.charge_seed_first_only:
         _log("Charge seeding: first shift only (--charge-seed-first-only)")
     if args.max_seed_rounds is not None and args.max_seed_rounds < 0:
@@ -715,7 +736,11 @@ if __name__ == "__main__":
         )
 
     engine = ChargeEngine()
-    seed_spec = _make_species(args.smiles, engine=engine)
+    seed_spec = _make_species(
+        args.smiles,
+        engine=engine,
+        only_protomer_search=args.only_protomer_search,
+    )
     seed_charge = AllChem.GetFormalCharge(seed_spec.tautomers[0].protomers[0].mol)
     _log(f"Input SMILES seed formal charge: {seed_charge}")
     _log(f"Generating seed Species at charge {seed_charge}")
@@ -745,6 +770,7 @@ if __name__ == "__main__":
             charge_step=-1,
             site_search_mode=args.site_search_mode,
             charge_seed_first_only=args.charge_seed_first_only,
+            only_protomer_search=args.only_protomer_search,
         )
         if next_spec is None:
             _log(
@@ -775,6 +801,7 @@ if __name__ == "__main__":
             charge_step=1,
             site_search_mode=args.site_search_mode,
             charge_seed_first_only=args.charge_seed_first_only,
+            only_protomer_search=args.only_protomer_search,
         )
         if next_spec is None:
             _log(
