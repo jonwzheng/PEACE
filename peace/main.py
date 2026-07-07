@@ -124,10 +124,13 @@ def _build_cli_parser():
         help="Gas-phase SP source: 'gxtb', 'xtb', or 'aimnet2'.",
     )
     p.add_argument(
-        "--gxtb-post-optimize",
-        type=bool,
-        default=False,
-        help="Deprecated; g-xTB geometry optimization is no longer used in the post-screen stage.",
+        "--gxtb-optimize",
+        action="store_true",
+        help=(
+            "Re-optimize each refined conformer in g-xTB gas phase before g-xTB SP "
+            "and frequency calculations. Default: g-xTB SP and frequencies use the "
+            "GFN2-xTB/ALPB optimized geometry."
+        ),
     )
     p.add_argument(
         "--xtb-version",
@@ -993,6 +996,7 @@ if __name__ == "__main__":
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         sp_energy=args.sp_energy,
+                        gxtb_optimize=bool(args.gxtb_optimize),
                         xtb_version=args.xtb_version,
                         xtb_executable=args.xtb_executable,
                         solvent=solvent,

@@ -10,6 +10,13 @@ from rdkit import Chem
 
 from .common import HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
 
+# xTB's default constrain force constant (0.05 Hartree/Bohr^2) is too weak to hold
+# zwitterionic N-H bonds near their target during g-xTB optimization.
+ZWITTERION_XH_CONSTRAINT_FORCE_CONSTANT = 1.0
+ZWITTERION_XH_DISTANCE_BY_SYMBOL = {
+    "N": 1.03,
+}
+
 
 def parse_xtb_total_energy_hartree(text: str) -> Optional[float]:
     float_re = float_regex()
@@ -119,14 +126,21 @@ def run_xtb_optimization(
     return xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h
 
 
-def build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: float = 1.05) -> int:
+def build_fix_xcontrol(
+    mol: Chem.Mol,
+    xcontrol_path: Path,
+    *,
+    fixed_distance: float = 1.05,
+    force_constant: float = ZWITTERION_XH_CONSTRAINT_FORCE_CONSTANT,
+) -> int:
     """
     Build xTB xcontrol constraints for positively charged zwitterionic X-H sites.
 
     For each heavy atom with formal charge +1 that is bonded to at least one
     hydrogen, write:
       $constrain
-       distance: X_idx, H_idx, <fixed_distance>
+       force constant=<force_constant>
+       distance: X_idx, H_idx, <target_distance>
       $end
 
     Bond distances are selected by heavy-atom element symbol where available.
@@ -136,9 +150,6 @@ def build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: fl
     """
     mol_h = Chem.AddHs(Chem.Mol(mol), addCoords=True)
     constraints: list[str] = []
-    zwitterion_xh_distance_by_symbol = {
-        "N": 1.03,
-    }
 
     for atom in mol_h.GetAtoms():
         if atom.GetAtomicNum() == 1:
@@ -151,7 +162,7 @@ def build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: fl
             continue
 
         heavy_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
-        constrained_distance = zwitterion_xh_distance_by_symbol.get(
+        constrained_distance = ZWITTERION_XH_DISTANCE_BY_SYMBOL.get(
             atom.GetSymbol(),
             fixed_distance,
         )
@@ -160,7 +171,12 @@ def build_fix_xcontrol(mol: Chem.Mol, xcontrol_path: Path, *, fixed_distance: fl
             constraints.append(f" distance: {heavy_idx},{h_idx},{constrained_distance:.2f}")
 
     if constraints:
-        content = "$constrain\n" + "\n".join(constraints) + "\n$end\n"
+        content = (
+            "$constrain\n"
+            f" force constant={force_constant}\n"
+            + "\n".join(constraints)
+            + "\n$end\n"
+        )
         xcontrol_path.write_text(content)
     elif xcontrol_path.exists():
         xcontrol_path.unlink()
