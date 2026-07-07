@@ -36,7 +36,7 @@ def run_gxtb_optimization(
     *,
     scratch_dir: Path,
     xyz_path: Path,
-    input_mol: Optional[Chem.Mol],
+    input_mol: Optional[Chem.Mol] = None,
     xtb_executable: str,
     opt_level: str,
     charge: int,
@@ -48,27 +48,24 @@ def run_gxtb_optimization(
 ) -> tuple[Path, Optional[float], Optional[float]]:
     xcontrol_path = scratch_dir / "xcontrol.inp"
     input_flag = ""
-    if xcontrol_path.exists():
-        input_flag = f" --input {shlex.quote(xcontrol_path.name)}"
-        log_status(log_paths, "OK", f"reusing constraints input for g-xTB optimization: {xcontrol_path.name}")
-    elif input_mol is not None:
+    if input_mol is not None:
         n_constraints = build_fix_xcontrol(input_mol, xcontrol_path, fixed_distance=1.01)
         if n_constraints > 0:
             input_flag = f" --input {shlex.quote(xcontrol_path.name)}"
             log_status(
                 log_paths,
                 "OK",
-                "regenerated xcontrol constraints for g-xTB optimization: "
+                "generated xcontrol constraints for g-xTB optimization: "
                 f"n_constraints={n_constraints}",
             )
         else:
             log_status(
                 log_paths,
                 "OK",
-                "xcontrol.inp missing and no positively charged heavy-atom X-H constraints were generated",
+                "no positively charged heavy-atom X-H constraints generated for g-xTB optimization",
             )
     else:
-        log_status(log_paths, "OK", "xcontrol.inp missing and no input_mol available; running unconstrained")
+        log_status(log_paths, "OK", "no input_mol available for g-xTB optimization constraints; running unconstrained")
 
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(xyz_path.name)} "

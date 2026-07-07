@@ -277,6 +277,7 @@ def run_gxtb_optimization(
     *,
     scratch_dir: Path,
     xyz_path: Path,
+    input_mol: Optional[Chem.Mol] = None,
     xtb_executable: str,
     opt_level: str,
     charge: int,
@@ -286,11 +287,33 @@ def run_gxtb_optimization(
     run_command: Callable[..., subprocess.CompletedProcess[str]],
     log_status: Callable[[list[Path], str, str], None],
 ) -> tuple[Path, Optional[float], Optional[float]]:
+    xcontrol_path = scratch_dir / "xcontrol.inp"
+    input_flag = ""
+    if input_mol is not None:
+        n_constraints = build_fix_xcontrol(input_mol, xcontrol_path, fixed_distance=1.01)
+        if n_constraints > 0:
+            input_flag = f" --input {shlex.quote(xcontrol_path.name)}"
+            log_status(
+                log_paths,
+                "OK",
+                "generated xcontrol constraints for g-xTB optimization: "
+                f"n_constraints={n_constraints}",
+            )
+        else:
+            log_status(
+                log_paths,
+                "OK",
+                "no positively charged heavy-atom X-H constraints generated for g-xTB optimization",
+            )
+    else:
+        log_status(log_paths, "OK", "no input_mol available for g-xTB optimization constraints; running unconstrained")
+
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} "
+        f"{shlex.quote(xyz_path.name)}"
+        f"{input_flag} "
         f"--opt {shlex.quote(opt_level)} "
         f'--driver "gxtb -grad -c xtbdriver.xyz" '
-        f"{shlex.quote(xyz_path.name)} "
         f"--chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running g-xTB optimization via driver: {cmd_opt}")
