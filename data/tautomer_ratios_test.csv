@@ -50,3 +50,4 @@ lomefloxacin,CCn1cc(C(=O)O)c(=O)c2cc(F)c(N3CCNC(C)C3)c(F)c21,0.965116279069768,d
 quinazolone-3-CH2COOH,Cc1nc2ccccc2c(=O)n1CC(=O)O,0.397841906825283,doi.org/10.1016/S0731-7085(99)00238-1,expt,structure provided by authors do not appear to line up with name – using structure not name
 pyridoxine,Cc1ncc(CO)c(CO)c1O,0.890450638722925,doi.org/10.1016/S0731-7085(99)00238-1,expt,
 cetirizine,O=C(O)COCCN1CCN(C(c2ccccc2)c2ccc(Cl)cc2)CC1,0.999993543499396,doi.org/10.2116/analsci.17.1203,expt,
+bufotenine,CN(C)CCc1c[nH]c2ccc(O)cc12,0.206349206349206,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,Kz = 0.26
