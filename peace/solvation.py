@@ -516,25 +516,55 @@ def _embed_kdg_conformer(mol: Chem.Mol, *, random_seed: int = 42) -> Chem.Mol:
     return mol_out
 
 
+def _resolve_kdg_embedded_conformer_count(
+    mol_h: Chem.Mol,
+    *,
+    embedded_conformers: Optional[int] = None,
+    min_conformers: int = REFINEMENT_MIN_EMBED_CONFORMERS,
+    max_embed_conformers: int = REFINEMENT_MAX_EMBED_CONFORMERS,
+) -> tuple[int, str]:
+    if embedded_conformers is not None:
+        n_confs = int(embedded_conformers)
+        if n_confs > int(max_embed_conformers):
+            raise ValueError(
+                f"embedded_conformers={n_confs} exceeds the maximum allowed "
+                f"({max_embed_conformers})."
+            )
+        return n_confs, "custom"
+
+    n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
+    n_confs = max(int(min_conformers), min(3 ** n_rotatable_bonds, int(max_embed_conformers)))
+    return n_confs, f"rotatable_bonds(n_rot={n_rotatable_bonds})"
+
+
 def _generate_kdg_conformer_ensemble(
     mol: Chem.Mol,
     *,
     random_seed: int = 42,
     min_conformers: int = REFINEMENT_MIN_EMBED_CONFORMERS,
-    max_conformers: int = REFINEMENT_MAX_EMBED_CONFORMERS,
+    max_embed_conformers: int = REFINEMENT_MAX_EMBED_CONFORMERS,
+    embedded_conformers: Optional[int] = None,
     log_paths: Optional[list[Path]] = None,
 ) -> tuple[Chem.Mol, list[int]]:
     """
     Embed a KDG conformer ensemble with _kdg_embed_parameters and rank conformers
     by MMFF94 single-point energy on the embedded geometries.
 
+    When ``embedded_conformers`` is set, that many conformers are embedded.
+    Otherwise the count follows the rotatable-bond heuristic
+    (``max(min_conformers, min(3**n_rotatable_bonds, max_embed_conformers))``).
+
     MMFF94 relaxation is applied later to the pruned conformer subset so that
     redundant embedded geometries are not collapsed before diversity selection.
     """
     mol_h = Chem.AddHs(Chem.Mol(mol))
     params = _kdg_embed_parameters(random_seed=random_seed)
-    n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
-    n_confs = max(int(min_conformers), min(2 ** n_rotatable_bonds, int(max_conformers)))
+    n_confs, size_source = _resolve_kdg_embedded_conformer_count(
+        mol_h,
+        embedded_conformers=embedded_conformers,
+        min_conformers=min_conformers,
+        max_embed_conformers=max_embed_conformers,
+    )
     conf_ids = list(AllChem.EmbedMultipleConfs(mol_h, int(n_confs), params))
     if not conf_ids:
         raise RuntimeError("RDKit KDG conformer embedding produced no conformers.")
@@ -548,7 +578,7 @@ def _generate_kdg_conformer_ensemble(
         _log_status(
             log_paths,
             "OK",
-            f"embedded KDG ensemble n_conformers={len(conf_ids)}",
+            f"embedded KDG ensemble n_conformers={len(conf_ids)} size_source={size_source}",
         )
     return mol_h, [conf_id for _energy, conf_id in ranked]
 
@@ -2387,6 +2417,7 @@ def run_protomer_solvation(
     timeout_s: Optional[int] = None,
     random_seed: int = 42,
     max_qm_conformers: int = REFINEMENT_MAX_QM_CONFORMERS,
+    embedded_conformers: Optional[int] = None,
     conformer_energy_threshold_kcal_mol: float = DEFAULT_CONFORMER_ENERGY_THRESHOLD_KCAL_MOL,
     log_prefix: Optional[str] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
@@ -2471,10 +2502,17 @@ def run_protomer_solvation(
         if graph_mol is None:
             raise ValueError(f"Could not rebuild 3D graph from SMILES: {protomer.smiles}")
 
+        if embedded_conformers is not None and int(embedded_conformers) <= int(max_qm_conformers):
+            raise ValueError(
+                f"embedded_conformers ({embedded_conformers}) must be greater than "
+                f"max_qm_conformers ({max_qm_conformers})."
+            )
+
         _progress("generating KDG conformer ensemble")
         mol_h, ranked_conf_ids = _generate_kdg_conformer_ensemble(
             graph_mol,
             random_seed=random_seed,
+            embedded_conformers=embedded_conformers,
             log_paths=log_paths,
         )
         selected_conf_ids = _select_lowest_embedded_conformers(

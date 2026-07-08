@@ -183,6 +183,17 @@ def _build_cli_parser():
         help="Maximum number of conformers to sample for QM refinement (lowest MMFF94 within energy window).",
     )
     p.add_argument(
+        "--embedded-conformers",
+        type=int,
+        default=None,
+        help=(
+            "Number of KDG conformers to embed during refinement. "
+            "Must be greater than --max-conformers. "
+            "If unset, uses the rotatable-bond heuristic "
+            "(max(20, min(3**n_rotatable_bonds, 500)))."
+        ),
+    )
+    p.add_argument(
         "--conformer-energy-threshold",
         type=float,
         default=10.0,
@@ -858,6 +869,12 @@ if __name__ == "__main__":
         )
         import shutil
 
+        if args.embedded_conformers is not None and args.embedded_conformers <= args.max_conformers:
+            raise ValueError(
+                f"--embedded-conformers ({args.embedded_conformers}) must be greater than "
+                f"--max-conformers ({args.max_conformers})."
+            )
+
         scratch_root_path = Path(args.scratch_root)
         input_species_key = seed_spec.key
         for charge_state in requested_charges:
@@ -1003,6 +1020,7 @@ if __name__ == "__main__":
                         dry_run=bool(args.dry_run),
                         opt_level=args.opt_level,
                         max_qm_conformers=int(args.max_conformers),
+                        embedded_conformers=args.embedded_conformers,
                         conformer_energy_threshold_kcal_mol=float(args.conformer_energy_threshold),
                         log_prefix=prefix,
                         progress_callback=lambda stage: _log(f"  {stage}"),
