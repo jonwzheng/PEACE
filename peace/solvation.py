@@ -227,7 +227,7 @@ def _workflow_log_prefix(
     n_conf: Optional[int] = None,
 ) -> str:
     parts = [
-        f"charge {charge_state:+d}",
+        f"chrg {charge_state:+d}",
         f"taut {taut_idx + 1}/{n_taut}",
         f"prot {prot_idx + 1}/{n_prot}",
     ]
