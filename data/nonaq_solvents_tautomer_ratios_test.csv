@@ -1,0 +1,10 @@
+molecule,SMILES,solvent,Kz,f_zwit,source,type,notes
+glycine,NCC(=O)O,dmso,40,0.975609756097561,doi:10.1021/jo00363a033,expt,
+methylglycine,CNCC(=O)O,dmso,27,0.964285714285714,doi:10.1021/jo00363a033,expt,
+dimethylglycine,CN(C)CC(=O)O,dmso,2,0.666666666666667,doi:10.1021/jo00363a033,expt,
+serine,NC(CO)C(=O)O,dmso,30,0.967741935483871,doi:10.1021/jo00363a033,expt,
+phenylalanine,NC(Cc1ccccc1)C(=O)O,dmso,16,0.941176470588235,doi:10.1021/jo00363a033,expt,
+mulfasin,CC(N)(Cc1ccc(O)c(O)c1)C(=O)O,dmso,9,0.9,doi:10.1021/jo00363a033,expt,
+lysine,NCCCCC(N)C(=O)O,dmso,34,0.971428571428571,doi:10.1021/jo00363a033,expt,
+glutamicacid,NC(CCC(=O)O)C(=O)O,dmso,24,0.96,doi:10.1021/jo00363a033,expt,
+GABA,NCCCC(=O)O,dmso,19,0.95,doi:10.1021/jo00363a033,expt,
