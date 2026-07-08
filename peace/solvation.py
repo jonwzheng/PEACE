@@ -525,11 +525,6 @@ def _resolve_kdg_embedded_conformer_count(
 ) -> tuple[int, str]:
     if embedded_conformers is not None:
         n_confs = int(embedded_conformers)
-        if n_confs > int(max_embed_conformers):
-            raise ValueError(
-                f"embedded_conformers={n_confs} exceeds the maximum allowed "
-                f"({max_embed_conformers})."
-            )
         return n_confs, "custom"
 
     n_rotatable_bonds = Chem.rdMolDescriptors.CalcNumRotatableBonds(mol_h)
@@ -583,12 +578,11 @@ def _generate_kdg_conformer_ensemble(
     return mol_h, [conf_id for _energy, conf_id in ranked]
 
 
-def _select_lowest_embedded_conformers(
+def _filter_ranked_embedded_conformers(
     mol_h: Chem.Mol,
     ranked_conf_ids: list[int],
     reference_mol: Chem.Mol,
     *,
-    max_conformers: int,
     energy_threshold_kcal_mol: Optional[float] = DEFAULT_CONFORMER_ENERGY_THRESHOLD_KCAL_MOL,
 ) -> list[int]:
     conf_energies: dict[int, Optional[float]] = {
@@ -598,7 +592,7 @@ def _select_lowest_embedded_conformers(
     finite_energies = [e for e in conf_energies.values() if e is not None]
     min_energy = min(finite_energies) if finite_energies else None
 
-    selected: list[int] = []
+    filtered: list[int] = []
     for conf_id in ranked_conf_ids:
         conf_id = int(conf_id)
         energy = conf_energies.get(conf_id)
@@ -611,15 +605,26 @@ def _select_lowest_embedded_conformers(
         conf_mol = _mol_from_conf_id(mol_h, conf_id)
         if not _connectivity_matches_reference(conf_mol, reference_mol):
             continue
-        if any(
-            _conformers_are_redundant(mol_h, conf_id, kept_id)
-            for kept_id in selected
-        ):
-            continue
-        selected.append(conf_id)
-        if len(selected) >= max_conformers:
-            break
-    return selected
+        filtered.append(conf_id)
+    return filtered
+
+
+def _select_lowest_embedded_conformers(
+    mol_h: Chem.Mol,
+    ranked_conf_ids: list[int],
+    reference_mol: Chem.Mol,
+    *,
+    max_conformers: int,
+    energy_threshold_kcal_mol: Optional[float] = DEFAULT_CONFORMER_ENERGY_THRESHOLD_KCAL_MOL,
+) -> list[int]:
+    filtered_conf_ids = _filter_ranked_embedded_conformers(
+        mol_h,
+        ranked_conf_ids,
+        reference_mol,
+        energy_threshold_kcal_mol=energy_threshold_kcal_mol,
+    )
+    deduplicated_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
+    return deduplicated_conf_ids[: int(max_conformers)]
 
 
 def _mol_from_conf_id(mol_h: Chem.Mol, conf_id: int, *, remove_hydrogens: bool = True) -> Chem.Mol:
@@ -2502,7 +2507,7 @@ def run_protomer_solvation(
         if graph_mol is None:
             raise ValueError(f"Could not rebuild 3D graph from SMILES: {protomer.smiles}")
 
-        if embedded_conformers is not None and int(embedded_conformers) <= int(max_qm_conformers):
+        if embedded_conformers is not None and int(embedded_conformers) < int(max_qm_conformers):
             raise ValueError(
                 f"embedded_conformers ({embedded_conformers}) must be greater than "
                 f"max_qm_conformers ({max_qm_conformers})."
@@ -2515,18 +2520,23 @@ def run_protomer_solvation(
             embedded_conformers=embedded_conformers,
             log_paths=log_paths,
         )
-        selected_conf_ids = _select_lowest_embedded_conformers(
+        filtered_conf_ids = _filter_ranked_embedded_conformers(
             mol_h,
             ranked_conf_ids,
             graph_mol,
-            max_conformers=max_qm_conformers,
             energy_threshold_kcal_mol=conformer_energy_threshold_kcal_mol,
         )
+        deduplicated_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
+        selected_conf_ids = deduplicated_conf_ids[: int(max_qm_conformers)]
         _log_status(
             log_paths,
             "OK",
-            f"embedded={len(ranked_conf_ids)} selected_for_qm={len(selected_conf_ids)} "
-            f"max_qm={max_qm_conformers} energy_threshold={conformer_energy_threshold_kcal_mol:.2f} kcal/mol",
+            f"embedded={len(ranked_conf_ids)} "
+            f"energy_connectivity_filter={len(filtered_conf_ids)} "
+            f"deduplicated={len(deduplicated_conf_ids)} "
+            f"selected_for_qm={len(selected_conf_ids)} "
+            f"max_qm={max_qm_conformers} "
+            f"energy_threshold={conformer_energy_threshold_kcal_mol:.2f} kcal/mol",
         )
 
         _progress("relaxing selected conformers with MMFF94")
