@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal, Optional, Union
 
+import numpy as np
+
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDetermineBonds, rdMolTransforms
 
@@ -153,6 +155,44 @@ def _rotatable_dihedral_signature(mol_h: Chem.Mol, conf_id: int) -> list[float]:
     ]
 
 
+def _read_xyz_heavy_atom_coords(path: Path) -> np.ndarray:
+    lines = path.read_text().strip().splitlines()
+    n_atoms = int(lines[0].strip())
+    coords: list[list[float]] = []
+    for line in lines[2 : 2 + n_atoms]:
+        parts = line.split()
+        if parts[0].upper() == "H":
+            continue
+        coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
+    return np.asarray(coords, dtype=float)
+
+
+def _kabsch_rmsd(
+    coords_a: np.ndarray,
+    coords_b: np.ndarray,
+) -> float:
+    if coords_a.shape != coords_b.shape or len(coords_a) == 0:
+        warnings.warn("Kabsch RMSD calculation failed: incompatible shapes or empty arrays")
+        return float("inf")
+    a_centered = coords_a - coords_a.mean(axis=0)
+    b_centered = coords_b - coords_b.mean(axis=0)
+    covariance = b_centered.T @ a_centered
+    left, _, right_t = np.linalg.svd(covariance)
+    rotation = left @ right_t
+    if np.linalg.det(rotation) < 0.0:
+        left[:, -1] *= -1.0
+        rotation = left @ right_t
+    b_aligned = b_centered @ rotation
+    diff = a_centered - b_aligned
+    return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
+
+
+def _heavy_atom_aligned_best_rmsd(mol_a: Chem.Mol, mol_b: Chem.Mol) -> float:
+    mol_a_no_h = Chem.RemoveHs(Chem.Mol(mol_a))
+    mol_b_no_h = Chem.RemoveHs(Chem.Mol(mol_b))
+    return float(AllChem.GetBestRMS(mol_a_no_h, mol_b_no_h))
+
+
 def _heavy_atom_rmsd(mol_h: Chem.Mol, conf_id_a: int, conf_id_b: int) -> float:
     mol_a = Chem.Mol(mol_h)
     mol_b = Chem.Mol(mol_h)
@@ -160,9 +200,7 @@ def _heavy_atom_rmsd(mol_h: Chem.Mol, conf_id_a: int, conf_id_b: int) -> float:
     mol_b.RemoveAllConformers()
     mol_a.AddConformer(mol_h.GetConformer(int(conf_id_a)), assignId=True)
     mol_b.AddConformer(mol_h.GetConformer(int(conf_id_b)), assignId=True)
-    mol_a_no_h = Chem.RemoveHs(mol_a)
-    mol_b_no_h = Chem.RemoveHs(mol_b)
-    return float(AllChem.GetBestRMS(mol_a_no_h, mol_b_no_h))
+    return _heavy_atom_aligned_best_rmsd(mol_a, mol_b)
 
 
 def _conformers_are_redundant(
@@ -188,25 +226,13 @@ def _conformers_are_redundant(
         return False
 
 
-def _read_xyz_coords(path: Path) -> list[tuple[str, float, float, float]]:
-    lines = path.read_text().strip().splitlines()
-    n_atoms = int(lines[0].strip())
-    coords: list[tuple[str, float, float, float]] = []
-    for line in lines[2 : 2 + n_atoms]:
-        parts = line.split()
-        coords.append((parts[0], float(parts[1]), float(parts[2]), float(parts[3])))
-    return coords
-
-
 def _heavy_atom_rmsd_from_xyz(path_a: Path, path_b: Path) -> float:
-    coords_a = [(x, y, z) for sym, x, y, z in _read_xyz_coords(path_a) if sym.upper() != "H"]
-    coords_b = [(x, y, z) for sym, x, y, z in _read_xyz_coords(path_b) if sym.upper() != "H"]
-    if not coords_a or len(coords_a) != len(coords_b):
+    try:
+        coords_a = _read_xyz_heavy_atom_coords(path_a)
+        coords_b = _read_xyz_heavy_atom_coords(path_b)
+        return _kabsch_rmsd(coords_a, coords_b)
+    except Exception:
         return float("inf")
-    sum_sq = 0.0
-    for (x1, y1, z1), (x2, y2, z2) in zip(coords_a, coords_b):
-        sum_sq += (x1 - x2) ** 2 + (y1 - y2) ** 2 + (z1 - z2) ** 2
-    return math.sqrt(sum_sq / len(coords_a))
 
 
 @dataclass
@@ -214,6 +240,7 @@ class ConformerPoolEntry:
     label: str
     terms: ConformerEnergyTerms
     opt_xyz_path: Optional[Path]
+    conformer_index: Optional[int] = None
 
 
 def _workflow_log_prefix(
@@ -397,6 +424,19 @@ def _optimized_xyz_are_redundant(path_a: Path, path_b: Path) -> bool:
         return _heavy_atom_rmsd_from_xyz(path_a, path_b) < CONFORMER_HEAVY_ATOM_RMSD_ANG
     except Exception:
         return False
+
+
+def _prune_redundant_conf_ids(mol_h: Chem.Mol, ranked_conf_ids: list[int]) -> list[int]:
+    kept: list[int] = []
+    for conf_id in ranked_conf_ids:
+        conf_id = int(conf_id)
+        if any(
+            _conformers_are_redundant(mol_h, conf_id, kept_id)
+            for kept_id in kept
+        ):
+            continue
+        kept.append(conf_id)
+    return kept
 
 
 def _prune_redundant_pool_entries(
@@ -1210,6 +1250,45 @@ def _save_runtime_xyz(
     return dest
 
 
+def _remove_unkept_conformer_artifacts(
+    *,
+    scratch_root: Path,
+    protomer_id: int | str,
+    kept_conformer_indices: frozenset[int],
+    log_paths: Optional[list[Path]] = None,
+) -> None:
+    xyz_dir = _runtime_xyz_dir(scratch_root)
+    prefix = f"protomer_{protomer_id}_conformer_"
+    for path in sorted(xyz_dir.glob(f"{prefix}*")):
+        index_part = path.name[len(prefix) :].split("_", 1)[0]
+        try:
+            conf_index = int(index_part)
+        except ValueError:
+            continue
+        if conf_index in kept_conformer_indices:
+            continue
+        path.unlink(missing_ok=True)
+        if log_paths is not None:
+            _log_status(log_paths, "CLEANUP", f"removed pruned conformer artifact {path.name}")
+
+    log_dir = scratch_root / "log"
+    if log_dir.is_dir():
+        for path in sorted(log_dir.glob(f"protomer_{protomer_id}_conformer_*")):
+            index_part = path.name.split("_conformer_", 1)[-1]
+            try:
+                conf_index = int(index_part)
+            except ValueError:
+                continue
+            if conf_index in kept_conformer_indices:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+            if log_paths is not None:
+                _log_status(log_paths, "CLEANUP", f"removed pruned conformer artifact {path.name}")
+
+
 @dataclass(frozen=True)
 class SolvationWorkflowResult:
     conformer_energy_kcal_mol: Optional[float]
@@ -1501,6 +1580,7 @@ def _preserve_output_files(
     scratch_dir: Path,
     *,
     keep_logs: bool = False,
+    kept_conformer_indices: Optional[frozenset[int]] = None,
 ) -> Optional[Path]:
     if not scratch_dir.exists():
         return None
@@ -1543,6 +1623,14 @@ def _preserve_output_files(
     for conf_dir in sorted(scratch_dir.glob("conformer_*")):
         if not conf_dir.is_dir():
             continue
+        conf_suffix = conf_dir.name.removeprefix("conformer_")
+        if kept_conformer_indices is not None:
+            try:
+                conf_index = int(conf_suffix)
+            except ValueError:
+                conf_index = None
+            if conf_index is not None and conf_index not in kept_conformer_indices:
+                continue
         for file_name in conformer_xyz_names:
             src = conf_dir / file_name
             if not src.exists():
@@ -1562,6 +1650,13 @@ def _preserve_output_files(
             if not (log_path.name.endswith("_run.log") or log_path.name == "xtbopt.log"):
                 continue
             rel = log_path.relative_to(scratch_dir)
+            if kept_conformer_indices is not None and rel.parts and rel.parts[0].startswith("conformer_"):
+                try:
+                    conf_index = int(rel.parts[0].removeprefix("conformer_"))
+                except ValueError:
+                    conf_index = None
+                if conf_index is not None and conf_index not in kept_conformer_indices:
+                    continue
             if rel in preserved_log_names:
                 continue
             preserved_log_names.add(rel)
@@ -2339,6 +2434,7 @@ def run_protomer_solvation(
     rrho_contribution_kcal_mol: Optional[float] = None
     solution_phase_free_energy_kcal_mol: Optional[float] = None
     final_opt_xyz: Optional[Path] = None
+    kept_conformer_indices: frozenset[int] = frozenset()
 
     try:
         if dry_run:
@@ -2401,10 +2497,14 @@ def run_protomer_solvation(
             selected_conf_ids,
             key=lambda cid: _mmff94_conformer_energy_kcal_mol(mol_h, cid) or float("inf"),
         )
+        n_before_mmff94_prune = len(selected_conf_ids)
+        selected_conf_ids = _prune_redundant_conf_ids(mol_h, selected_conf_ids)
         _log_status(
             log_paths,
             "OK",
-            f"MMFF94-relaxed {len(selected_conf_ids)} conformers for QM refinement",
+            f"MMFF94-relaxed {n_before_mmff94_prune} conformers; "
+            f"pre_qm_redundant_prune={n_before_mmff94_prune - len(selected_conf_ids)} "
+            f"selected_for_qm={len(selected_conf_ids)}",
         )
 
         pool_entries: list[ConformerPoolEntry] = []
@@ -2450,6 +2550,7 @@ def run_protomer_solvation(
                         label=conf_label,
                         terms=workflow_result.terms,
                         opt_xyz_path=workflow_result.opt_xyz_path,
+                        conformer_index=conf_idx,
                     )
                 )
 
@@ -2470,6 +2571,11 @@ def run_protomer_solvation(
             pruned_pool = [lowest_entry]
         conformer_terms = [entry.terms for entry in pruned_pool]
         conformer_labels = [entry.label for entry in pruned_pool]
+        kept_conformer_indices = frozenset(
+            entry.conformer_index
+            for entry in pruned_pool
+            if entry.conformer_index is not None
+        )
         _log_status(
             log_paths,
             "OK",
@@ -2548,7 +2654,18 @@ def run_protomer_solvation(
             stdout_tail=str(exc)[-4000:],
         )
 
-    final_xtbopt_path = _preserve_output_files(scratch_dir, keep_logs=keep_logs)
+    final_xtbopt_path = _preserve_output_files(
+        scratch_dir,
+        keep_logs=keep_logs,
+        kept_conformer_indices=kept_conformer_indices if kept_conformer_indices else None,
+    )
+    if kept_conformer_indices:
+        _remove_unkept_conformer_artifacts(
+            scratch_root=scratch_context.scratch_root,
+            protomer_id=protomer_id,
+            kept_conformer_indices=kept_conformer_indices,
+            log_paths=log_paths,
+        )
     _cleanup_scratch_dir(
         scratch_dir,
         keep_scratch=keep_scratch,
