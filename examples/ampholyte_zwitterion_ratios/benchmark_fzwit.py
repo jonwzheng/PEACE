@@ -86,7 +86,7 @@ def main() -> None:
             "--screen-threshold",
             "35.0",
             "--max-conformers",
-            "5",
+            "10",
         ]
         # consider also site-search all
         cmd.extend(main_extra_args)
@@ -123,7 +123,7 @@ def main() -> None:
         )
 
     out_df = pd.DataFrame(rows)
-    out_path = results_root / "benchmark_results.csv"
+    out_path = results_root / "benchmark_results_9-july-2026.csv"
     out_df.to_csv(out_path, index=False)
     print(f"Saved benchmark summary to: {out_path}")
 
