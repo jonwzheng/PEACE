@@ -46,7 +46,7 @@ REFINEMENT_MAX_EMBED_CONFORMERS = 500
 DEFAULT_CONFORMER_ENERGY_THRESHOLD_KCAL_MOL = 10.0
 CONFORMER_DIHEDRAL_MAX_DEV_DEG = 10.0
 CONFORMER_DIHEDRAL_RMS_DEV_DEG = 20.0
-CONFORMER_HEAVY_ATOM_RMSD_ANG = 0.20
+CONFORMER_ALL_ATOM_RMSD_ANG = 0.20
 
 EnergyListValue = Union[float, str]
 
@@ -158,14 +158,12 @@ def _rotatable_dihedral_signature(mol_h: Chem.Mol, conf_id: int) -> list[float]:
     ]
 
 
-def _read_xyz_heavy_atom_coords(path: Path) -> np.ndarray:
+def _read_xyz_atom_coords(path: Path) -> np.ndarray:
     lines = path.read_text().strip().splitlines()
     n_atoms = int(lines[0].strip())
     coords: list[list[float]] = []
     for line in lines[2 : 2 + n_atoms]:
         parts = line.split()
-        if parts[0].upper() == "H":
-            continue
         coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
     return np.asarray(coords, dtype=float)
 
@@ -190,20 +188,18 @@ def _kabsch_rmsd(
     return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
 
 
-def _heavy_atom_aligned_best_rmsd(mol_a: Chem.Mol, mol_b: Chem.Mol) -> float:
-    mol_a_no_h = Chem.RemoveHs(Chem.Mol(mol_a))
-    mol_b_no_h = Chem.RemoveHs(Chem.Mol(mol_b))
-    return float(AllChem.GetBestRMS(mol_a_no_h, mol_b_no_h))
+def _all_atom_aligned_best_rmsd(mol_a: Chem.Mol, mol_b: Chem.Mol) -> float:
+    return float(AllChem.GetBestRMS(Chem.Mol(mol_a), Chem.Mol(mol_b)))
 
 
-def _heavy_atom_rmsd(mol_h: Chem.Mol, conf_id_a: int, conf_id_b: int) -> float:
+def _all_atom_rmsd(mol_h: Chem.Mol, conf_id_a: int, conf_id_b: int) -> float:
     mol_a = Chem.Mol(mol_h)
     mol_b = Chem.Mol(mol_h)
     mol_a.RemoveAllConformers()
     mol_b.RemoveAllConformers()
     mol_a.AddConformer(mol_h.GetConformer(int(conf_id_a)), assignId=True)
     mol_b.AddConformer(mol_h.GetConformer(int(conf_id_b)), assignId=True)
-    return _heavy_atom_aligned_best_rmsd(mol_a, mol_b)
+    return _all_atom_aligned_best_rmsd(mol_a, mol_b)
 
 
 def _conformers_are_redundant(
@@ -213,7 +209,7 @@ def _conformers_are_redundant(
     *,
     dihedral_max_dev_deg: float = CONFORMER_DIHEDRAL_MAX_DEV_DEG,
     dihedral_rms_dev_deg: float = CONFORMER_DIHEDRAL_RMS_DEV_DEG,
-    heavy_atom_rmsd_ang: float = CONFORMER_HEAVY_ATOM_RMSD_ANG,
+    all_atom_rmsd_ang: float = CONFORMER_ALL_ATOM_RMSD_ANG,
 ) -> bool:
     dihedrals_a = _rotatable_dihedral_signature(mol_h, conf_id_a)
     dihedrals_b = _rotatable_dihedral_signature(mol_h, conf_id_b)
@@ -224,15 +220,15 @@ def _conformers_are_redundant(
         if max_dev < dihedral_max_dev_deg and dihedral_rms < dihedral_rms_dev_deg:
             return True
     try:
-        return _heavy_atom_rmsd(mol_h, conf_id_a, conf_id_b) < heavy_atom_rmsd_ang
+        return _all_atom_rmsd(mol_h, conf_id_a, conf_id_b) < all_atom_rmsd_ang
     except Exception:
         return False
 
 
-def _heavy_atom_rmsd_from_xyz(path_a: Path, path_b: Path) -> float:
+def _all_atom_rmsd_from_xyz(path_a: Path, path_b: Path) -> float:
     try:
-        coords_a = _read_xyz_heavy_atom_coords(path_a)
-        coords_b = _read_xyz_heavy_atom_coords(path_b)
+        coords_a = _read_xyz_atom_coords(path_a)
+        coords_b = _read_xyz_atom_coords(path_b)
         return _kabsch_rmsd(coords_a, coords_b)
     except Exception:
         return float("inf")
@@ -424,7 +420,7 @@ def _optimized_xyz_are_redundant(path_a: Path, path_b: Path) -> bool:
     if dih_a is not None and dih_b is not None and _dihedral_signatures_match(dih_a, dih_b):
         return True
     try:
-        return _heavy_atom_rmsd_from_xyz(path_a, path_b) < CONFORMER_HEAVY_ATOM_RMSD_ANG
+        return _all_atom_rmsd_from_xyz(path_a, path_b) < CONFORMER_ALL_ATOM_RMSD_ANG
     except Exception:
         return False
 
@@ -970,8 +966,8 @@ def _try_gxtb_gas_phase_refinement(
             log_paths=log_paths,
             progress_callback=progress_callback,
         )
-    except XtbFatalError as exc:
-        report_xtb_fatal_and_exit(exc)
+    except XtbFatalError:
+        raise
     except (RuntimeError, FileNotFoundError) as exc:
         return _fallback_sp_on_alpb(
             f"g-xTB gas-phase re-optimization failed; falling back to g-xTB SP on GFN2-xTB/ALPB geometry: {exc}",
@@ -1005,8 +1001,8 @@ def _try_gxtb_gas_phase_refinement(
             timeout_s=timeout_s,
             log_paths=log_paths,
         )
-    except XtbFatalError as exc:
-        report_xtb_fatal_and_exit(exc)
+    except XtbFatalError:
+        raise
     except (RuntimeError, FileNotFoundError) as exc:
         return _fallback_sp_on_alpb(
             f"g-xTB gas-phase SP on optimized geometry failed; falling back to g-xTB SP on GFN2-xTB/ALPB geometry: {exc}",
@@ -1949,8 +1945,8 @@ def _run_screening_conformer_workflow(
             terms.workflow_status = "partial-failed"
 
         return ConformerWorkflowResult(terms=terms, opt_xyz_path=screening_geom_path)
-    except XtbFatalError as exc:
-        report_xtb_fatal_and_exit(exc)
+    except XtbFatalError:
+        raise
     except Exception as exc:
         _log_status(log_paths, "FAIL", f"screening conformer workflow failed: {exc}")
         terms.workflow_status = "screening-failed"
@@ -2213,8 +2209,8 @@ def _run_single_conformer_workflow(
             terms.workflow_status = "partial-failed"
 
         return ConformerWorkflowResult(terms=terms, opt_xyz_path=solvation_xyz_path)
-    except XtbFatalError as exc:
-        report_xtb_fatal_and_exit(exc)
+    except XtbFatalError:
+        raise
     except Exception as exc:
         _log_status(log_paths, "FAIL", f"single-conformer workflow failed: {exc}")
         terms.workflow_status = "optimization-failed"
@@ -2375,8 +2371,8 @@ def run_protomer_screening(
             _set_mol_prop_str(protomer.mol, "screening_opt_xyz_path", str(workflow_result.opt_xyz_path))
         _progress("finished screening workflow")
 
-    except XtbFatalError as exc:
-        report_xtb_fatal_and_exit(exc)
+    except XtbFatalError:
+        raise
     except Exception as e:
         _progress(f"failed screening: {e}")
         _log_status(log_paths, "FAIL", f"screening exception for protomer_id={protomer_id}: {e}")
@@ -2530,7 +2526,7 @@ def run_protomer_solvation(
                 f"conformer refinement uses g-xTB gas-phase SP; ignoring sp_energy={sp_energy}",
             )
         if gxtb_optimize:
-            _progress("g-xTB gas-phase re-opt. enabled for refinement conformers")
+            _progress("g-xTB gas-phase re-opt. enabled for conformer refinement")
         else:
             _progress("GFN2-xTB/ALPB opt. for g-xTB SP and frequencies")
 
@@ -2706,8 +2702,8 @@ def run_protomer_solvation(
         )
         _progress("finished conformer refinement")
 
-    except XtbFatalError as exc:
-        report_xtb_fatal_and_exit(exc)
+    except XtbFatalError:
+        raise
     except Exception as exc:
         _progress(f"failed: {exc}")
         _log_status(log_paths, "FAIL", f"conformer refinement exception for protomer_id={protomer_id}: {exc}")
