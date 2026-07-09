@@ -474,37 +474,6 @@ def _prune_redundant_pool_entries(
     return kept
 
 
-def _screening_terms_from_protomer(protomer: Protomer) -> Optional[ConformerEnergyTerms]:
-    mol = protomer.mol
-    if mol is None or not mol.HasProp("screening_solution_phase_free_energy_kcal_mol"):
-        return None
-
-    def _prop(name: str) -> EnergyListValue:
-        if not mol.HasProp(name):
-            return "not-run"
-        try:
-            return float(mol.GetDoubleProp(name))
-        except ValueError:
-            return mol.GetProp(name)
-
-    return ConformerEnergyTerms(
-        gas_sp_energy_kcal_mol=_prop("screening_gas_sp_energy_kcal_mol"),
-        gas_sp_energy_xtb_kcal_mol=_prop("screening_gas_sp_energy_xtb_kcal_mol"),
-        solvation_free_energy_kcal_mol=_prop("screening_solvation_free_energy_kcal_mol"),
-        rrho_contribution_kcal_mol=_prop("screening_rrho_contribution_kcal_mol"),
-        solution_phase_free_energy_kcal_mol=_prop("screening_solution_phase_free_energy_kcal_mol"),
-        workflow_status="screening",
-    )
-
-
-def _screening_opt_xyz_path(protomer: Protomer) -> Optional[Path]:
-    mol = protomer.mol
-    if mol is None or not mol.HasProp("screening_opt_xyz_path"):
-        return None
-    path = Path(mol.GetProp("screening_opt_xyz_path"))
-    return path if path.is_file() else None
-
-
 def _embed_kdg_conformer(mol: Chem.Mol, *, random_seed: int = 42) -> Chem.Mol:
     mol_h = Chem.AddHs(Chem.Mol(mol))
     params = _kdg_embed_parameters(random_seed=random_seed)
@@ -548,8 +517,8 @@ def _generate_kdg_conformer_ensemble(
     Otherwise the count follows the rotatable-bond heuristic
     (``max(min_conformers, min(3**n_rotatable_bonds, max_embed_conformers))``).
 
-    MMFF94 relaxation is applied later to the pruned conformer subset so that
-    redundant embedded geometries are not collapsed before diversity selection.
+    MMFF94 relaxation is applied later to the quick-pruned candidate pool, before
+    applying the final max_qm_conformers limit.
     """
     mol_h = Chem.AddHs(Chem.Mol(mol))
     params = _kdg_embed_parameters(random_seed=random_seed)
@@ -622,8 +591,14 @@ def _select_lowest_embedded_conformers(
         reference_mol,
         energy_threshold_kcal_mol=energy_threshold_kcal_mol,
     )
-    deduplicated_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
-    return deduplicated_conf_ids[: int(max_conformers)]
+    candidate_pool_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
+    _optimize_mmff94_conformers(mol_h, candidate_pool_conf_ids)
+    ranked_relaxed_conf_ids = sorted(
+        candidate_pool_conf_ids,
+        key=lambda cid: _mmff94_conformer_energy_kcal_mol(mol_h, cid) or float("inf"),
+    )
+    deduplicated_relaxed_conf_ids = _prune_redundant_conf_ids(mol_h, ranked_relaxed_conf_ids)
+    return deduplicated_relaxed_conf_ids[: int(max_conformers)]
 
 
 def _mol_from_conf_id(mol_h: Chem.Mol, conf_id: int, *, remove_hydrogens: bool = True) -> Chem.Mol:
@@ -2463,9 +2438,9 @@ def run_protomer_solvation(
     """
     Conformer-refinement workflow for protomers that pass screening.
 
-    Generates a KDG conformer ensemble ranked by MMFF94 on MMFF94-relaxed
-    geometries, prunes redundant geometries (dihedral/RMSD plus connectivity),
-    selects up to max_qm_conformers within an MMFF94 energy window,
+    Generates a KDG conformer ensemble, quickly filters/prunes obvious duplicate
+    embedded geometries, MMFF94-relaxes the resulting candidate pool, then
+    selects up to max_qm_conformers from the relaxed/reranked pool,
     runs GFN2-xTB/ALPB optimization, CPCM-X solvation on the ALPB geometry,
     g-xTB gas-phase SP and RRHO on the ALPB geometry by default, optionally
     g-xTB gas-phase re-optimization first when ``gxtb_optimize`` is enabled,
@@ -2553,32 +2528,32 @@ def run_protomer_solvation(
             graph_mol,
             energy_threshold_kcal_mol=conformer_energy_threshold_kcal_mol,
         )
-        deduplicated_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
-        selected_conf_ids = deduplicated_conf_ids[: int(max_qm_conformers)]
+        candidate_pool_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
         _log_status(
             log_paths,
             "OK",
             f"embedded={len(ranked_conf_ids)} "
             f"energy_connectivity_filter={len(filtered_conf_ids)} "
-            f"deduplicated={len(deduplicated_conf_ids)} "
-            f"selected_for_qm={len(selected_conf_ids)} "
+            f"candidate_pool={len(candidate_pool_conf_ids)} "
             f"max_qm={max_qm_conformers} "
             f"energy_threshold={conformer_energy_threshold_kcal_mol:.2f} kcal/mol",
         )
 
-        _progress("relaxing selected conformers with MMFF94")
-        _optimize_mmff94_conformers(mol_h, selected_conf_ids, log_paths=log_paths)
-        selected_conf_ids = sorted(
-            selected_conf_ids,
+        _progress("relaxing candidate conformer pool with MMFF94")
+        _optimize_mmff94_conformers(mol_h, candidate_pool_conf_ids, log_paths=log_paths)
+        ranked_relaxed_conf_ids = sorted(
+            candidate_pool_conf_ids,
             key=lambda cid: _mmff94_conformer_energy_kcal_mol(mol_h, cid) or float("inf"),
         )
-        n_before_mmff94_prune = len(selected_conf_ids)
-        selected_conf_ids = _prune_redundant_conf_ids(mol_h, selected_conf_ids)
+        n_before_mmff94_prune = len(ranked_relaxed_conf_ids)
+        deduplicated_relaxed_conf_ids = _prune_redundant_conf_ids(mol_h, ranked_relaxed_conf_ids)
+        selected_conf_ids = deduplicated_relaxed_conf_ids[: int(max_qm_conformers)]
         _log_status(
             log_paths,
             "OK",
             f"MMFF94-relaxed {n_before_mmff94_prune} conformers; "
-            f"pre_qm_redundant_prune={n_before_mmff94_prune - len(selected_conf_ids)} "
+            f"pre_qm_redundant_prune={n_before_mmff94_prune - len(deduplicated_relaxed_conf_ids)} "
+            f"relaxed_candidate_pool={len(deduplicated_relaxed_conf_ids)} "
             f"selected_for_qm={len(selected_conf_ids)}",
         )
 

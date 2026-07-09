@@ -203,14 +203,17 @@ def _build_cli_parser():
         "--max-conformers",
         type=int,
         default=5,
-        help="Maximum number of conformers to sample for QM refinement (lowest MMFF94 within energy window).",
+        help=(
+            "Maximum number of MMFF94-relaxed conformers to send to QM refinement "
+            "after KDG embedding, quick pruning, relaxation, and reranking."
+        ),
     )
     p.add_argument(
         "--embedded-conformers",
         type=int,
         default=None,
         help=(
-            "Number of KDG conformers to embed during refinement. "
+            "Number of KDG conformers to embed before quick pruning and MMFF94 relaxation. "
             "Must be greater than --max-conformers. "
             "If unset, uses the rotatable-bond heuristic "
             "(max(20, min(3**n_rotatable_bonds, 500)))."
