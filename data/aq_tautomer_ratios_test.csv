@@ -36,3 +36,6 @@ cetirizine,O=C(O)COCCN1CCN(C(c2ccccc2)c2ccc(Cl)cc2)CC1,0.999993543499396,doi.org
 bufotenine,CN(C)CCc1c[nH]c2ccc(O)cc12,0.206349206349206,doi.org/10.1111/j.1476-5381.1980.tb07908.x,expt,water,Kz = 0.26
 4-aminobenzoic acid,Nc1ccc(C(=O)O)cc1,0.105,doi.org/10.1021/jo00317a002,expt,water,
 4-dimethylaminobenzoic acid,CN(C)c1ccc(C(=O)O)cc1,0.194,doi.org/10.1021/jo00317a002,expt,water,
+Anthranilic acid,Nc1ccccc1C(=O)O,0.89486278964408,doi.org/10.1007/s10953-014-0190-3,expt,water,log10 Kz = 0.93 +/- 0.03
+N-methylanthranilic acid,CNc1cccc(C(=O)O)c1,0.953308946947088,doi.org/10.1007/s10953-014-0190-3,expt,water,log10 Kz = 1.31 +/- 0.04
+N-phenylanthranilic acid,O=C(O)c1ccccc1Nc1ccccc1,0.888184230221883,doi.org/10.1007/s10953-014-0190-3,expt,water,log10 Kz = 0.90 +/- 0.05
