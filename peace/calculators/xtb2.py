@@ -1,4 +1,5 @@
-# Compatibility layer for g-xTB 2.0.0+
+# Compatibility layer for g-xTB 2.0.1+
+# largely the same as xtb.py but different way of running g-xTB
 
 from __future__ import annotations
 

@@ -17,6 +17,8 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdDetermineBonds, rdMolTransforms
 
 from .calculators import (
+    XtbFatalError,
+    report_xtb_fatal_and_exit,
     run_aimnet2_optimization,
     run_aimnet2_single_point_energy,
     run_cpcmx_single_point,
@@ -25,6 +27,7 @@ from .calculators import (
     run_gxtb2_single_point_energy,
     run_gxtb_optimization,
     run_hessian_and_parse_energies,
+    run_xtb_command,
     run_xtb_optimization,
 )
 from .calculators.common import opt_convergence_retry_levels
@@ -752,6 +755,8 @@ def _run_optimization_with_convergence_retry(
 
         try:
             result = run_at_level(level)
+        except XtbFatalError as exc:
+            report_xtb_fatal_and_exit(exc)
         except (RuntimeError, FileNotFoundError) as exc:
             if attempt_idx < len(levels) - 1:
                 next_level = levels[attempt_idx + 1]
@@ -858,7 +863,7 @@ def _run_xtb_optimization_with_retry(
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
-            run_command=_run,
+            run_command=_run_xtb,
             log_status=_log_status,
         ),
     )
@@ -891,7 +896,7 @@ def _run_gxtb_single_point_on_xyz(
         timeout_s=timeout_s,
         dry_run=dry_run,
         log_paths=log_paths,
-        run_command=_run,
+        run_command=_run_xtb,
         log_status=_log_status,
     )
     return gas_sp_energy_kcal_mol
@@ -942,6 +947,8 @@ def _try_gxtb_gas_phase_refinement(
                 timeout_s=timeout_s,
                 log_paths=log_paths,
             )
+        except XtbFatalError as exc:
+            report_xtb_fatal_and_exit(exc)
         except (RuntimeError, FileNotFoundError) as exc:
             _log_status(log_paths, "WARN", f"g-xTB fallback SP on GFN2-xTB/ALPB geometry failed: {exc}")
             return GxtbRefinementResult(gas_sp_energy_kcal_mol=None)
@@ -963,6 +970,8 @@ def _try_gxtb_gas_phase_refinement(
             log_paths=log_paths,
             progress_callback=progress_callback,
         )
+    except XtbFatalError as exc:
+        report_xtb_fatal_and_exit(exc)
     except (RuntimeError, FileNotFoundError) as exc:
         return _fallback_sp_on_alpb(
             f"g-xTB gas-phase re-optimization failed; falling back to g-xTB SP on GFN2-xTB/ALPB geometry: {exc}",
@@ -996,6 +1005,8 @@ def _try_gxtb_gas_phase_refinement(
             timeout_s=timeout_s,
             log_paths=log_paths,
         )
+    except XtbFatalError as exc:
+        report_xtb_fatal_and_exit(exc)
     except (RuntimeError, FileNotFoundError) as exc:
         return _fallback_sp_on_alpb(
             f"g-xTB gas-phase SP on optimized geometry failed; falling back to g-xTB SP on GFN2-xTB/ALPB geometry: {exc}",
@@ -1039,7 +1050,7 @@ def _try_hessian_with_fallback(
                 timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
-                run_command=_run,
+                run_command=_run_xtb,
                 log_status=_log_status,
             )
             if gas_sp_energy_xtb_kcal_mol is not None and rrho_contribution_kcal_mol is not None:
@@ -1051,6 +1062,8 @@ def _try_hessian_with_fallback(
                 "RRHO at g-xTB gas-phase geometry returned incomplete terms; "
                 "falling back to GFN2-xTB/ALPB geometry",
             )
+        except XtbFatalError as exc:
+            report_xtb_fatal_and_exit(exc)
         except (RuntimeError, FileNotFoundError) as exc:
             _log_status(
                 log_paths,
@@ -1069,7 +1082,7 @@ def _try_hessian_with_fallback(
         timeout_s=timeout_s,
         dry_run=dry_run,
         log_paths=log_paths,
-        run_command=_run,
+        run_command=_run_xtb,
         log_status=_log_status,
     )
 
@@ -1102,7 +1115,7 @@ def _run_gxtb_optimization_with_retry(
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
-            run_command=_run,
+            run_command=_run_xtb,
             log_status=_log_status,
         )
         return run_gxtb_opt(**opt_kwargs)
@@ -1150,6 +1163,23 @@ def _run(
         text=True,
         timeout=timeout_s,
         check=False,
+    )
+
+
+def _run_xtb(
+    cmd: str | list[str],
+    *,
+    cwd: Path,
+    timeout_s: Optional[int] = None,
+    dry_run: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run an xTB command with log inspection and SCF etemp retry."""
+    return run_xtb_command(
+        cmd,
+        cwd=cwd,
+        timeout_s=timeout_s,
+        dry_run=dry_run,
+        run_fn=_run,
     )
 
 
@@ -1826,7 +1856,7 @@ def _run_screening_conformer_workflow(
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
-            run_command=_run,
+            run_command=_run_xtb,
             log_status=_log_status,
         )
         terms.solvation_free_energy_kcal_mol = _format_energy_entry(
@@ -1851,7 +1881,7 @@ def _run_screening_conformer_workflow(
                 timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
-                run_command=_run,
+                run_command=_run_xtb,
                 log_status=_log_status,
             )
 
@@ -1873,6 +1903,8 @@ def _run_screening_conformer_workflow(
                 timeout_s=timeout_s,
                 log_paths=log_paths,
             )
+        except XtbFatalError as exc:
+            report_xtb_fatal_and_exit(exc)
         except Exception as exc:
             _log_status(
                 log_paths,
@@ -1917,6 +1949,8 @@ def _run_screening_conformer_workflow(
             terms.workflow_status = "partial-failed"
 
         return ConformerWorkflowResult(terms=terms, opt_xyz_path=screening_geom_path)
+    except XtbFatalError as exc:
+        report_xtb_fatal_and_exit(exc)
     except Exception as exc:
         _log_status(log_paths, "FAIL", f"screening conformer workflow failed: {exc}")
         terms.workflow_status = "screening-failed"
@@ -2050,7 +2084,7 @@ def _run_single_conformer_workflow(
             timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
-            run_command=_run,
+            run_command=_run_xtb,
             log_status=_log_status,
         )
         terms.solvation_free_energy_kcal_mol = _format_energy_entry(
@@ -2133,6 +2167,8 @@ def _run_single_conformer_workflow(
                 timeout_s=timeout_s,
                 log_paths=log_paths,
             )
+        except XtbFatalError as exc:
+            report_xtb_fatal_and_exit(exc)
         except Exception as exc:
             _log_status(
                 log_paths,
@@ -2177,6 +2213,8 @@ def _run_single_conformer_workflow(
             terms.workflow_status = "partial-failed"
 
         return ConformerWorkflowResult(terms=terms, opt_xyz_path=solvation_xyz_path)
+    except XtbFatalError as exc:
+        report_xtb_fatal_and_exit(exc)
     except Exception as exc:
         _log_status(log_paths, "FAIL", f"single-conformer workflow failed: {exc}")
         terms.workflow_status = "optimization-failed"
@@ -2337,6 +2375,8 @@ def run_protomer_screening(
             _set_mol_prop_str(protomer.mol, "screening_opt_xyz_path", str(workflow_result.opt_xyz_path))
         _progress("finished screening workflow")
 
+    except XtbFatalError as exc:
+        report_xtb_fatal_and_exit(exc)
     except Exception as e:
         _progress(f"failed screening: {e}")
         _log_status(log_paths, "FAIL", f"screening exception for protomer_id={protomer_id}: {e}")
@@ -2412,9 +2452,6 @@ def run_protomer_solvation(
     opt_level: str = "loose",
     sp_energy: Literal["gxtb", "xtb", "aimnet2"] = "gxtb",
     gxtb_optimize: bool = False,
-    recompute_solvation: bool = False,
-    recompute_frequencies: bool = False,
-    reuse_screening_terms: bool = True,
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -2492,16 +2529,10 @@ def run_protomer_solvation(
                 "WARN",
                 f"conformer refinement uses g-xTB gas-phase SP; ignoring sp_energy={sp_energy}",
             )
-        if recompute_solvation or recompute_frequencies or reuse_screening_terms:
-            _log_status(
-                log_paths,
-                "WARN",
-                "legacy post-screen flags (recompute_*/reuse_screening_terms) are ignored",
-            )
         if gxtb_optimize:
-            _progress("g-xTB gas-phase re-optimization enabled for refinement conformers")
+            _progress("g-xTB gas-phase re-opt. enabled for refinement conformers")
         else:
-            _progress("using GFN2-xTB/ALPB geometry for g-xTB SP and frequencies")
+            _progress("GFN2-xTB/ALPB opt. for g-xTB SP and frequencies")
 
         graph_mol = Chem.MolFromSmiles(protomer.smiles)
         if graph_mol is None:
@@ -2675,6 +2706,8 @@ def run_protomer_solvation(
         )
         _progress("finished conformer refinement")
 
+    except XtbFatalError as exc:
+        report_xtb_fatal_and_exit(exc)
     except Exception as exc:
         _progress(f"failed: {exc}")
         _log_status(log_paths, "FAIL", f"conformer refinement exception for protomer_id={protomer_id}: {exc}")

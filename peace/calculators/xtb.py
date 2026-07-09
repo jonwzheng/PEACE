@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import sys
 import warnings
 from pathlib import Path
 from typing import Callable, Optional
@@ -9,6 +10,134 @@ from typing import Callable, Optional
 from rdkit import Chem
 
 from .common import HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
+
+XTB_ERROR_MARKER = "[ERROR]"
+XTB_SCF_ETEMP_RETRY_K = 1000.0
+XTB_NATIVE_LOG_NAMES = ("xtb.log", "xtbout", "xtbopt.log", "xtb.out")
+
+
+class XtbFatalError(RuntimeError):
+    """Raised when an xTB calculation fails and cannot be recovered."""
+
+
+def report_xtb_fatal_and_exit(exc: XtbFatalError) -> None:
+    """Print a fatal xTB error to stderr and terminate the program."""
+    print(f"\n[ERROR] xTB calculation failed.\n{exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+
+
+def collect_xtb_log_text(
+    scratch_dir: Path,
+    completed: subprocess.CompletedProcess[str],
+) -> str:
+    chunks: list[str] = []
+    if completed.stdout:
+        chunks.append(completed.stdout)
+    if completed.stderr:
+        chunks.append(completed.stderr)
+    for name in XTB_NATIVE_LOG_NAMES:
+        log_path = scratch_dir / name
+        if log_path.is_file():
+            chunks.append(log_path.read_text(encoding="utf-8", errors="replace"))
+    return "\n".join(chunks)
+
+
+def has_xtb_fatal_error(text: str) -> bool:
+    return XTB_ERROR_MARKER in text
+
+
+def is_xtb_scf_convergence_error(text: str) -> bool:
+    if not has_xtb_fatal_error(text):
+        return False
+    lower = text.lower()
+    return "scf" in lower and "did not converge" in lower
+
+
+def _cmd_has_etemp(cmd: str | list[str]) -> bool:
+    if isinstance(cmd, str):
+        return "--etemp" in cmd.split()
+    return "--etemp" in cmd
+
+
+def add_etemp_to_cmd(cmd: str | list[str], etemp: float) -> str | list[str]:
+    if _cmd_has_etemp(cmd):
+        return cmd
+    if isinstance(cmd, str):
+        return f"{cmd} --etemp {etemp}"
+    return [*cmd, "--etemp", str(etemp)]
+
+
+def _format_xtb_fatal_message(
+    *,
+    cmd: str | list[str],
+    completed: subprocess.CompletedProcess[str],
+    log_text: str,
+    retried_with_etemp: bool,
+) -> str:
+    cmd_text = cmd if isinstance(cmd, str) else " ".join(shlex.quote(x) for x in cmd)
+    retry_note = (
+        f"Retried with --etemp {XTB_SCF_ETEMP_RETRY_K} after SCF convergence failure.\n"
+        if retried_with_etemp
+        else ""
+    )
+    tail = log_text[-4000:] if log_text else ""
+    return (
+        f"{retry_note}"
+        f"xTB command failed: {cmd_text}\n"
+        f"returncode={completed.returncode}\n"
+        f"--- xTB log tail ---\n{tail}"
+    )
+
+
+def run_xtb_command(
+    cmd: str | list[str],
+    *,
+    cwd: Path,
+    timeout_s: Optional[int] = None,
+    dry_run: bool = False,
+    run_fn: Callable[..., subprocess.CompletedProcess[str]],
+    etemp_retry_k: float = XTB_SCF_ETEMP_RETRY_K,
+) -> subprocess.CompletedProcess[str]:
+    """
+    Run an xTB command, inspect created logs for [ERROR], and retry SCF failures
+    with a higher electronic temperature.
+    """
+    if dry_run:
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    completed = run_fn(cmd, cwd=cwd, timeout_s=timeout_s, dry_run=False)
+    log_text = collect_xtb_log_text(cwd, completed)
+    if not has_xtb_fatal_error(log_text):
+        return completed
+
+    if is_xtb_scf_convergence_error(log_text) and not _cmd_has_etemp(cmd):
+        retry_cmd = add_etemp_to_cmd(cmd, etemp_retry_k)
+        print(
+            f"[PEACE] xTB SCF convergence failure detected; "
+            f"retrying with --etemp {etemp_retry_k}",
+            file=sys.stderr,
+        )
+        retry_completed = run_fn(retry_cmd, cwd=cwd, timeout_s=timeout_s, dry_run=False)
+        retry_log_text = collect_xtb_log_text(cwd, retry_completed)
+        if not has_xtb_fatal_error(retry_log_text):
+            return retry_completed
+        raise XtbFatalError(
+            _format_xtb_fatal_message(
+                cmd=retry_cmd,
+                completed=retry_completed,
+                log_text=retry_log_text,
+                retried_with_etemp=True,
+            )
+        )
+
+    raise XtbFatalError(
+        _format_xtb_fatal_message(
+            cmd=cmd,
+            completed=completed,
+            log_text=log_text,
+            retried_with_etemp=False,
+        )
+    )
 
 # xTB's default constrain force constant (0.05 Hartree/Bohr^2) is too weak to hold
 # zwitterionic N-H bonds near their target during g-xTB optimization.
