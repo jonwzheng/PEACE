@@ -4,6 +4,11 @@ from rdkit.Chem.MolStandardize.rdMolStandardize import TautomerEnumerator
 
 import warnings
 
+_SITE_SEARCH_MODES = frozenset(
+    {"default", "strong", "all", "very_weak", "none", "strong_and_weak"}
+)
+
+
 class ChargeEngine:
     """
     Engine for searching for specific acid/base substructures.
@@ -16,10 +21,14 @@ class ChargeEngine:
                     {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 0]}, # TODO: exclude NH acids.
                 "weak_basic": 
                     {"groups": ["[#6,#15,#16](=[O+0])[!OX2H+0]"], "sites": [1]}, 
+                "very_weak_basic": # TODO: add groups and sites
+                    {"groups": [], "sites": []}, 
                 "strong_acidic": # Acid-type groups (e.g., -ate acids), NH+ strong oddball acids like SeH
                     {"groups": ["[#6,#15,#16,As](=[O,S,P])[O,S,P;X2H+0]", "[#7+;!H0+0]", "[Se,Cl,F,Br,I;!H0]"], "sites": [2, 0, 0]},
-                "weak_acidic": # [-OH, -NH, -SH acids]; nitrile group + special case; electron withdrawing CH e.g. CH-nitro group, CC=O alpha-carbon of carbox. group without matching carboxylic acid (CC=O) note, very weakly acidic; 
-                    {"groups": ["[#7,#8,#16;!H0+0]", "[#6,#7;!H0+0]C#N", "N#[C;H1+0]", "[#6,#7;!H0+0][N+](=O)[O-]", "[#6;!H0+0][#6](=[O+0])[!O;!S;!P]",], "sites": [0, 0, 1, 0, 0]} 
+                "weak_acidic": # [-OH, -NH, -SH acids]
+                    {"groups": ["[#7,#8,#16;!H0+0]"], "sites": [0]}, 
+                "very_weak_acidic": # CC=O alpha-carbon of carbox. group without matching carboxylic acid (CC=O); nitrile group[s]; electron withdrawing CH e.g. CH-nitro group
+                    {"groups": ["[#6;!H0+0][#6](=[O+0])[!O;!S;!P]", "[#6,#7;!H0+0]C#N", "N#[C;H1+0]", "[#6,#7;!H0+0][N+](=O)[O-]",], "sites": [0, 0, 1, 0]} 
                 }
         
         for acidity_type, values in self.SMARTS_DICT.items():
@@ -33,17 +42,26 @@ class ChargeEngine:
         site_search_mode: str = "default",
     ) -> list[int]:
         """Given a Tautomer, returns atom indices for the query acidity/basicity."""
-        if site_search_mode not in ("default", "strong", "all", "none"):
+        if site_search_mode not in _SITE_SEARCH_MODES:
             raise ValueError(
-                "site_search_mode must be 'default', 'strong', 'all', or 'none'"
+                "site_search_mode must be one of: "
+                f"{', '.join(sorted(_SITE_SEARCH_MODES))}"
             )
         if site_search_mode == "none":
             return []
 
         if search_type == "acidic":
-            strong_key, weak_key = "strong_acidic", "weak_acidic"
+            tier_keys = {
+                "strong": "strong_acidic",
+                "weak": "weak_acidic",
+                "very_weak": "very_weak_acidic",
+            }
         elif search_type == "basic":
-            strong_key, weak_key = "strong_basic", "weak_basic"
+            tier_keys = {
+                "strong": "strong_basic",
+                "weak": "weak_basic",
+                "very_weak": "very_weak_basic",
+            }
         elif search_type not in self.SMARTS_DICT:
             raise ValueError(
                 f"Search type must be in: {self.SMARTS_DICT.keys()}, or 'acidic' or 'basic'"
@@ -54,28 +72,34 @@ class ChargeEngine:
                 smarts_collection["cached_mols"], smarts_collection["sites"]
             )
 
-        strong_collection = self.SMARTS_DICT[strong_key]
-        strong_sites = taut.find_ionization_sites(
-            strong_collection["cached_mols"], strong_collection["sites"]
-        )
-
-        if site_search_mode == "strong":
-            return strong_sites
+        def sites_for_tier(tier: str) -> list[int]:
+            smarts_collection = self.SMARTS_DICT[tier_keys[tier]]
+            return taut.find_ionization_sites(
+                smarts_collection["cached_mols"], smarts_collection["sites"]
+            )
 
         if site_search_mode == "default":
+            strong_sites = sites_for_tier("strong")
             if strong_sites:
                 return strong_sites
-            weak_collection = self.SMARTS_DICT[weak_key]
-            return taut.find_ionization_sites(
-                weak_collection["cached_mols"], weak_collection["sites"]
+            return sites_for_tier("weak")
+
+        if site_search_mode == "strong":
+            return sites_for_tier("strong")
+        if site_search_mode == "very_weak":
+            return sites_for_tier("very_weak")
+        if site_search_mode == "strong_and_weak":
+            return list(dict.fromkeys(sites_for_tier("strong") + sites_for_tier("weak")))
+        if site_search_mode == "all":
+            return list(
+                dict.fromkeys(
+                    sites_for_tier("strong")
+                    + sites_for_tier("weak")
+                    + sites_for_tier("very_weak")
+                )
             )
 
-        if site_search_mode == "all":
-            weak_collection = self.SMARTS_DICT[weak_key]
-            weak_sites = taut.find_ionization_sites(
-                weak_collection["cached_mols"], weak_collection["sites"]
-            )
-            return list(dict.fromkeys(strong_sites + weak_sites))
+        return []
 
     def search_for_tautomers_from_mol(self, ref_mol) -> list[str]:
         """

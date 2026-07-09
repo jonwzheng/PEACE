@@ -6,10 +6,33 @@ from peace import __version__
 from datetime import datetime
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from rdkit.Chem import AllChem
 import copy
 import pandas as pd
+
+# Context-specific defaults when --site-search-mode is not set.
+SiteSearchContext = Literal["same_charge", "inter_charge", "cross_charge"]
+
+def resolve_site_search_settings(
+    context: SiteSearchContext,
+    *,
+    site_search_mode: str | None,
+) -> str:
+    """
+    Return the site-search mode for an enumeration context.
+
+    When site_search_mode is set, every context uses that mode. Otherwise:
+      - same-charge and inter-charge: strong + weak
+      - cross-charge: strong + weak + very-weak
+    """
+    if site_search_mode is not None:
+        return site_search_mode
+
+    if context == "cross_charge":
+        return "all"
+    return "strong_and_weak"
+
 
 def _build_cli_parser():
     import argparse
@@ -124,12 +147,12 @@ def _build_cli_parser():
         help="Gas-phase SP source: 'gxtb', 'xtb', or 'aimnet2'.",
     )
     p.add_argument(
-        "--gxtb-optimize",
+        "--no-gxtb-optimize",
         action="store_true",
         help=(
-            "Re-optimize each refined conformer in g-xTB gas phase before g-xTB SP "
-            "and frequency calculations. Default: g-xTB SP and frequencies use the "
-            "GFN2-xTB/ALPB optimized geometry."
+            "By default, each refined conformer is re-optimized in g-xTB gas phase before g-xTB SP "
+            "and frequency calculations. If set: g-xTB SP and frequencies use the "
+            "GFN2-xTB/ALPB optimized geometries."
         ),
     )
     p.add_argument(
@@ -218,14 +241,15 @@ def _build_cli_parser():
     p.add_argument(
         "--site-search-mode",
         type=str,
-        default="default",
-        choices=["default", "strong", "all", "none"],
+        default=None,
+        choices=["default", "strong", "all", "very_weak", "none"],
         help=(
-            "Ionizable-site search strategy: 'default' checks strong acid/base groups first "
-            "and only weak groups if none are found; 'strong' uses only strong groups "
-            "(no weak fallback); 'all' includes both strong and weak groups "
-            "(more protomer combinations); 'none' skips ionization search and keeps "
-            "only the initial tautomer protomers."
+            "Ionizable-site search strategy applied uniformly to same-charge protomer "
+            "expansion, inter-charge tautomer enumeration, and cross-charge seeding. "
+            "Choices: 'default' (strong first, weak fallback), 'strong', 'all' "
+            "(strong + weak + very-weak), 'very_weak' (very-weak sites only), "
+            "'none' (skip ionization search). When omitted, context defaults apply: "
+            "same-charge and inter-charge use strong + weak; cross-charge uses all."
         ),
     )
     p.add_argument(
@@ -289,7 +313,7 @@ def _shifted_smiles_for_tautomer(
     *,
     engine: ChargeEngine,
     charge_step: int,
-    site_search_mode: str,
+    site_search_mode: str | None,
 ) -> list[str]:
     """Collect deduplicated one-step charge-shift SMILES from all protomers in one tautomer."""
     shifted_smiles: list[str] = []
@@ -364,16 +388,21 @@ def _collect_charge_shifts_from_protomer(
     *,
     engine: ChargeEngine,
     charge_step: int,
-    site_search_mode: str,
+    site_search_mode: str | None,
 ) -> list[str]:
-    """Return canonical SMILES for all distinct one-step charge shifts at any matching site."""
+    """Return canonical SMILES for one-step cross-charge shifts (e.g. 0 -> -1 or +1)."""
     if protomer.mol is None:
         return []
 
     search_type = "acidic" if charge_step < 0 else "basic"
+    mode = resolve_site_search_settings(
+        "cross_charge", site_search_mode=site_search_mode
+    )
     trial_taut = Tautomer.from_mol(copy.deepcopy(protomer.mol))
     sites = engine.search_ionization_centers(
-        trial_taut, search_type, site_search_mode=site_search_mode
+        trial_taut,
+        search_type,
+        site_search_mode=mode,
     )
     if not sites:
         return []
@@ -433,10 +462,16 @@ def _enumerate_species_protomers(
     spec: Species,
     *,
     engine: ChargeEngine,
-    site_search_mode: str,
+    site_search_mode: str | None = None,
     max_seed_rounds: int | None = None,
     seed_round_cap_factor: int = 5,
+    context: SiteSearchContext = "same_charge",
 ) -> None:
+    """Enumerate prototropic protomer forms at fixed formal charge."""
+    expansion_mode = resolve_site_search_settings(
+        context, site_search_mode=site_search_mode
+    )
+    context_label = "inter-charge" if context == "inter_charge" else "same-charge"
     tautomer_items = list(spec.tautomers.items())
     _log(f"Tautomer enumeration complete: {len(tautomer_items)} tautomer(s) found")
     for taut_idx, taut in tautomer_items:
@@ -459,7 +494,7 @@ def _enumerate_species_protomers(
         )
     tautomer_items = list(spec.tautomers.items())
 
-    if site_search_mode == "none":
+    if expansion_mode == "none":
         _log("Skipping protomer enumeration (site-search-mode=none)")
         for taut_idx, taut in tautomer_items:
             _log(
@@ -478,7 +513,7 @@ def _enumerate_species_protomers(
             )
         return
 
-    _log("Enumerating protomeric forms for each tautomer")
+    _log(f"Enumerating protomeric forms for each tautomer ({context_label})")
 
     for taut_idx, taut in tautomer_items:
         # Iterative protomer expansion:
@@ -494,7 +529,7 @@ def _enumerate_species_protomers(
         n_ionizable_groups = _count_ionizable_groups(
             reference_protomer,
             engine=engine,
-            site_search_mode=site_search_mode,
+            site_search_mode=expansion_mode,
         )
         round_cap = _resolve_max_seed_rounds(
             n_ionizable_groups,
@@ -528,10 +563,14 @@ def _enumerate_species_protomers(
 
             seed_taut = Tautomer.from_mol(copy.deepcopy(seed_protomer.mol))
             acid_sites = engine.search_ionization_centers(
-                seed_taut, "acidic", site_search_mode=site_search_mode
+                seed_taut,
+                "acidic",
+                site_search_mode=expansion_mode,
             )
             basic_sites = engine.search_ionization_centers(
-                seed_taut, "basic", site_search_mode=site_search_mode
+                seed_taut,
+                "basic",
+                site_search_mode=expansion_mode,
             )
             _log(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} round {round_idx} seed={seed_smiles} "
@@ -566,7 +605,7 @@ def _seed_adjacent_charge_species(
     *,
     engine: ChargeEngine,
     charge_step: int,
-    site_search_mode: str,
+    site_search_mode: str | None,
     charge_seed_first_only: bool = False,
     only_protomer_search: bool = False,
 ) -> Optional[Species]:
@@ -752,7 +791,14 @@ if __name__ == "__main__":
     _log(f"Run started at: {run_started_at}")
     _log(f"Input SMILES: {args.smiles}")
     _log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
-    _log(f"Site search mode: {args.site_search_mode}")
+    _log(
+        "Site search mode: "
+        + (
+            f"{args.site_search_mode} (all contexts)"
+            if args.site_search_mode is not None
+            else "context defaults (same/inter-charge: strong+weak; cross-charge: all)"
+        )
+    )
     _log(f"Solvent: {solvent.alpb} (CPCM-X: {solvent.cpcm})")
     if args.only_protomer_search:
         _log("Tautomer enumeration: disabled (--only-protomer-search)")
@@ -817,6 +863,7 @@ if __name__ == "__main__":
             site_search_mode=args.site_search_mode,
             max_seed_rounds=args.max_seed_rounds,
             seed_round_cap_factor=args.seed_round_cap_factor,
+            context="inter_charge",
         )
         species_by_charge[target_charge] = next_spec
         current_spec = next_spec
@@ -848,6 +895,7 @@ if __name__ == "__main__":
             site_search_mode=args.site_search_mode,
             max_seed_rounds=args.max_seed_rounds,
             seed_round_cap_factor=args.seed_round_cap_factor,
+            context="inter_charge",
         )
         species_by_charge[target_charge] = next_spec
         current_spec = next_spec
@@ -1013,7 +1061,7 @@ if __name__ == "__main__":
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         sp_energy=args.sp_energy,
-                        gxtb_optimize=bool(args.gxtb_optimize),
+                        gxtb_optimize=bool(not args.no_gxtb_optimize),
                         xtb_version=args.xtb_version,
                         xtb_executable=args.xtb_executable,
                         solvent=solvent,
