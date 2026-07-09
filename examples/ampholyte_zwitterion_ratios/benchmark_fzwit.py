@@ -28,12 +28,12 @@ def _compute_predicted_f_zwit(results_csv: Path) -> float:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Benchmark predicted zwitterion fractions against tautomer_ratios_test.csv."
+        description="Benchmark predicted zwitterion fractions against tautomer ratios test data (default: aq_tautomer_ratios_test.csv)."
     )
     parser.add_argument(
         "--input-csv",
         type=str,
-        default="data/tautomer_ratios_test.csv",
+        default="data/aq_tautomer_ratios_test.csv",
         help="Input CSV with SMILES and experimental f_zwit.",
     )
     parser.add_argument(
@@ -67,7 +67,7 @@ def main() -> None:
         mol_dir = results_root / f"{idx:03d}_{_slugify(name)}"
         mol_dir.mkdir(parents=True, exist_ok=True)
 
-        output_csv = mol_dir / "results.csv"
+        output_csv = mol_dir / "results_9-july-2026.csv"
         scratch_root = mol_dir / "solvation"
 
         cmd = [
@@ -84,7 +84,9 @@ def main() -> None:
             str(output_csv),
             "--no-plot",
             "--screen-threshold",
-            "30.0",
+            "35.0",
+            "--max-conformers",
+            "5",
         ]
         # consider also site-search all
         cmd.extend(main_extra_args)

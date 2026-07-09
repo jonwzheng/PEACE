@@ -1,0 +1,18 @@
+molecule,SMILES,f_zwit,source,type,solvent,notes
+3-hydroxypicolinamide,NC(=O)c1ncccc1O,0.93,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+azapropazone,CCCC1C(=O)N2C(N(C)C)=Nc3ccc(C)cc3N2C1=O,0.9999999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+mizoribine,NC(=O)c1ncn([C@@H]2O[C@H](CO)[C@@H](O)[C@H]2O)c1O,1,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,"PEACE predicts the right protomer, namely NC(=O)c1[nH+]cn([C@@H]2O[C@H](CO)[C@@H](O)[C@H]2O)c1[O-]. See: https://pubs.rsc.org/en/content/articlelanding/2000/p1/b005510g"
+piroxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2ccccc2S1(=O)=O,0.9995,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1ncccc1O,0.9,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+4-chloro-N-cyclohexyl-3-hydroxypyridine-2-carboxamide,O=C(NC1CCCCC1)c1nccc(Cl)c1O,0.98,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+N-cyclohexyl-3-hydroxy-4-methylpyridine-2-carboxamide,Cc1ccnc(C(=O)NC2CCCCC2)c1O,0.95,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+N-cyclohexyl-3-hydroxy-4-methoxypyridine-2-carboxamide,COc1ccnc(C(=O)NC2CCCCC2)c1O,0.999999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+roxadustat,Cc1nc(C(=O)NCC(=O)O)c(O)c2ccc(Oc3ccccc3)cc12,0.9999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,"95% Z1, 4.99% Z2"
+vadadustat,O=C(O)CNC(=O)c1ncc(-c2cccc(Cl)c2)cc1O,0.88,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,"41% Z1, 47% Z2"
+FG-2216,O=C(O)CNC(=O)c1nc(Cl)c2ccccc2c1O,0.002001,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,"0.2% Z1, 0.0001% Z2"
+2-[(3-hydroxypyridine-2-carbonyl)amino]acetic acid,C1=CC(=C(N=C1)C(=O)NCC(=O)O)O,0.97,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+isoxicam,Cc1cc(NC(=O)C2=C(O)c3ccccc3S(=O)(=O)N2C)no1,0.00005,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+meloxicam,Cc1cnc(NC(=O)C2=C(O)c3ccccc3S(=O)(=O)N2C)s1,0.89,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+sudoxicam,CN1C(C(=O)Nc2nccs2)=C(O)c2ccccc2S1(=O)=O,0.74,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+tenoxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2sccc2S1(=O)=O,0.9998,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,
+lornoxicam,CN1C(C(=O)Nc2ccccn2)=C(O)c2sc(Cl)cc2S1(=O)=O,0.999999,doi.org/10.1021/acs.jmedchem.4c00596,COSMO-RS,water,

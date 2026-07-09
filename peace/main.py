@@ -196,7 +196,7 @@ def _build_cli_parser():
     p.add_argument(
         "--screen-threshold",
         type=float,
-        default=30.0,
+        default=35.0,
         help="Exclude protomers from conformer refinement if xTB screening delta exceeds energy threshold (kcal/mol).",
     )
     p.add_argument(
@@ -1150,7 +1150,7 @@ if __name__ == "__main__":
                 exclude_connectivity_mismatch=bool(args.exclude_unconverged),
             )
             f_zwit = spec.get_f_zwit()
-            _log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.5f}")
+            _log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.16f}")
             for taut_idx, taut in tautomer_items:
                 _log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
                 for prot_idx, protomer in taut.protomers.items():
