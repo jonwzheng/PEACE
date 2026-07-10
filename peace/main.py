@@ -471,6 +471,12 @@ def _enumerate_species_protomers(
     context: SiteSearchContext = "same_charge",
 ) -> None:
     """Enumerate prototropic protomer forms at fixed formal charge."""
+
+    def _compact_kept_protomer_ids() -> None:
+        remapped = spec.reindex_protomers()
+        if remapped:
+            _log("Reindexed kept protomer IDs after deduplication/pruning")
+
     expansion_mode = resolve_site_search_settings(
         context, site_search_mode=site_search_mode
     )
@@ -504,6 +510,7 @@ def _enumerate_species_protomers(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers kept: "
                 f"{len(taut.protomers)}"
             )
+        _compact_kept_protomer_ids()
         return
 
     # TODO: consider refactoring this
@@ -514,6 +521,7 @@ def _enumerate_species_protomers(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers kept: "
                 f"{len(taut.protomers)}"
             )
+        _compact_kept_protomer_ids()
         return
 
     _log(f"Enumerating protomeric forms for each tautomer ({context_label})")
@@ -592,15 +600,21 @@ def _enumerate_species_protomers(
         _log(
             f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers found: {len(taut.protomers)}"
         )
-        for prot_idx, prot in taut.protomers.items():
-            _log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)}: {prot.smiles}")
+        for display_idx, (_prot_idx, prot) in enumerate(taut.protomers.items(), start=1):
+            _log(f"    Protomer {display_idx}/{len(taut.protomers)}: {prot.smiles}")
 
     if registry.skipped_count:
         unique_total = sum(len(taut.protomers) for _, taut in tautomer_items)
+        resonance_note = (
+            f"; resonance-charge duplicates={registry.resonance_skipped_count}"
+            if registry.resonance_skipped_count
+            else ""
+        )
         _log(
             f"Species protomer deduplication: removed/skipped {registry.skipped_count} "
-            f"duplicate(s); {unique_total} unique canonical protomer(s) remain"
+            f"duplicate(s){resonance_note}; {unique_total} unique canonical protomer(s) remain"
         )
+    _compact_kept_protomer_ids()
 
 
 def _seed_adjacent_charge_species(

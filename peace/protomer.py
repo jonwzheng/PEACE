@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rdkit import Chem
 from rdkit.Chem import AllChem, Mol
 from .common import (
     protonate_at_site,
@@ -11,6 +12,7 @@ from .common import (
 
 import copy
 import itertools
+import json
 import warnings
 
 import numpy as np
@@ -38,6 +40,61 @@ def _sync_alternate_tautomer_ids_prop(protomer: "Protomer") -> None:
     )
 
 
+def _sync_resonance_charge_forms_prop(protomer: "Protomer") -> None:
+    if protomer.mol is None or not protomer.resonance_charge_forms:
+        return
+    protomer.mol.SetProp(
+        "resonance_charge_forms",
+        json.dumps(protomer.resonance_charge_forms, sort_keys=True),
+    )
+
+
+def _resonance_charge_form_label(
+    *,
+    tautomer_id: int | None,
+    protomer_id: int | None,
+) -> str:
+    taut_label = f"tautomer_{tautomer_id}" if tautomer_id is not None else "tautomer_unknown"
+    prot_label = f"id_{protomer_id}" if protomer_id is not None else "id_unknown"
+    return f"{taut_label}_{prot_label}"
+
+
+def _explicit_h_neutral_connectivity_graph(mol: Mol | None) -> Mol | None:
+    """
+    Return a graph for resonance-charge duplicate detection.
+
+    Hydrogens are explicit graph nodes, formal charges are ignored, and all bonds
+    are treated as single/non-aromatic. The result is intentionally unsanitized so
+    RDKit does not reinterpret valence or implicit hydrogens after neutralization.
+    """
+    if mol is None:
+        return None
+    graph = Chem.AddHs(Chem.Mol(mol))
+    rw = Chem.RWMol(graph)
+    for atom in rw.GetAtoms():
+        atom.SetFormalCharge(0)
+        atom.SetNoImplicit(True)
+        atom.SetIsAromatic(False)
+        atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
+    for bond in rw.GetBonds():
+        bond.SetBondType(Chem.BondType.SINGLE)
+        bond.SetIsAromatic(False)
+        bond.SetStereo(Chem.BondStereo.STEREONONE)
+    return rw.GetMol()
+
+
+def _connectivity_graphs_are_isomorphic(left: Mol | None, right: Mol | None) -> bool:
+    if left is None or right is None:
+        return False
+    if left.GetNumAtoms() != right.GetNumAtoms():
+        return False
+    if left.GetNumBonds() != right.GetNumBonds():
+        return False
+    return left.HasSubstructMatch(right, useChirality=False) and right.HasSubstructMatch(
+        left, useChirality=False
+    )
+
+
 def _record_duplicate_skip(
     canonical_protomer: "Protomer",
     *,
@@ -54,6 +111,32 @@ def _record_duplicate_skip(
     return _increment_degeneracy(canonical_protomer)
 
 
+def _record_resonance_charge_skip(
+    canonical_protomer: "Protomer",
+    skipped_protomer: "Protomer",
+    *,
+    skipped_tautomer_id: int | None,
+    skipped_protomer_id: int | None,
+    canonical_tautomer_id: int,
+) -> int:
+    """Record a discarded resonance-charge form on the kept protomer."""
+    skipped_smiles = canon_smiles(skipped_protomer.smiles) or skipped_protomer.smiles
+    if skipped_smiles:
+        canonical_protomer.resonance_charge_forms[skipped_smiles] = _resonance_charge_form_label(
+            tautomer_id=skipped_tautomer_id,
+            protomer_id=skipped_protomer_id,
+        )
+        _sync_resonance_charge_forms_prop(canonical_protomer)
+    if (
+        skipped_tautomer_id is not None
+        and skipped_tautomer_id != canonical_tautomer_id
+        and skipped_tautomer_id not in canonical_protomer.alternate_tautomer_ids
+    ):
+        canonical_protomer.alternate_tautomer_ids.append(skipped_tautomer_id)
+        _sync_alternate_tautomer_ids_prop(canonical_protomer)
+    return _increment_degeneracy(canonical_protomer)
+
+
 class SpeciesProtomerRegistry:
     """
     Track canonical protomer representatives across all tautomers in a Species.
@@ -63,7 +146,9 @@ class SpeciesProtomerRegistry:
 
     def __init__(self) -> None:
         self._canonical: dict[str, tuple[int, int, Protomer]] = {}
+        self._resonance_graphs: list[tuple[int, int, Protomer, Mol]] = []
         self.skipped_count = 0
+        self.resonance_skipped_count = 0
 
     def is_duplicate(self, smiles: str) -> bool:
         canonical = canon_smiles(smiles)
@@ -75,11 +160,22 @@ class SpeciesProtomerRegistry:
             return None
         return self._canonical.get(canonical)
 
+    def resonance_for(self, protomer: "Protomer") -> tuple[int, int, Protomer] | None:
+        graph = _explicit_h_neutral_connectivity_graph(protomer.mol)
+        if graph is None:
+            return None
+        for tautomer_id, protomer_id, canonical_protomer, canonical_graph in self._resonance_graphs:
+            if _connectivity_graphs_are_isomorphic(graph, canonical_graph):
+                return tautomer_id, protomer_id, canonical_protomer
+        return None
+
     def register(self, tautomer_id: int, protomer_id: int, protomer: Protomer) -> None:
         canonical = canon_smiles(protomer.smiles)
-        if canonical is None:
-            return
-        self._canonical[canonical] = (tautomer_id, protomer_id, protomer)
+        if canonical is not None:
+            self._canonical[canonical] = (tautomer_id, protomer_id, protomer)
+        graph = _explicit_h_neutral_connectivity_graph(protomer.mol)
+        if graph is not None:
+            self._resonance_graphs.append((tautomer_id, protomer_id, protomer, graph))
 
     def seed_from_species(self, spec: "Species") -> int:
         """Register existing protomers and remove cross-tautomer duplicates."""
@@ -108,6 +204,27 @@ class SpeciesProtomerRegistry:
                     removed += 1
                     self.skipped_count += 1
                     continue
+                resonance_existing = self.resonance_for(protomer)
+                if resonance_existing is not None:
+                    canon_taut_idx, canon_prot_idx, canon_protomer = resonance_existing
+                    degeneracy = _record_resonance_charge_skip(
+                        canon_protomer,
+                        protomer,
+                        skipped_tautomer_id=taut_idx,
+                        skipped_protomer_id=prot_idx,
+                        canonical_tautomer_id=canon_taut_idx,
+                    )
+                    warnings.warn(
+                        f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
+                        f"under tautomer {taut_idx}; canonical entry is tautomer "
+                        f"{canon_taut_idx} protomer {canon_prot_idx} "
+                        f"(degeneracy={degeneracy})."
+                    )
+                    del taut.protomers[prot_idx]
+                    removed += 1
+                    self.skipped_count += 1
+                    self.resonance_skipped_count += 1
+                    continue
                 if protomer.mol is not None and not protomer.mol.HasProp("degeneracy"):
                     protomer.mol.SetIntProp("degeneracy", 1)
                 self.register(taut_idx, prot_idx, protomer)
@@ -127,6 +244,7 @@ class Protomer:
         self.input_mol = copy.deepcopy(mol) if mol is not None else None
         self.ionization_sites = []
         self.alternate_tautomer_ids: list[int] = []
+        self.resonance_charge_forms: dict[str, str] = {}
         self.is_zwitterion = self._is_zwitterion_mol(mol) if mol is not None else False
 
     def __repr__(self):
@@ -320,6 +438,7 @@ class Tautomer:
         canonical_smiles = canon_smiles(protomer.smiles)
         if canonical_smiles is None:
             return False
+        idx = list(self.protomers.keys())[-1] + 1
 
         if species_registry is not None:
             existing = species_registry.canonical_for(protomer.smiles)
@@ -344,8 +463,32 @@ class Tautomer:
                         f"protomer {canon_prot_idx} (degeneracy={degeneracy})."
                     )
                 return False
-
-        idx = list(self.protomers.keys())[-1] + 1
+            resonance_existing = species_registry.resonance_for(protomer)
+            if resonance_existing is not None:
+                canon_taut_idx, canon_prot_idx, canon_protomer = resonance_existing
+                skipped_tautomer_id = tautomer_id if tautomer_id is not None else None
+                degeneracy = _record_resonance_charge_skip(
+                    canon_protomer,
+                    protomer,
+                    skipped_tautomer_id=skipped_tautomer_id,
+                    skipped_protomer_id=idx,
+                    canonical_tautomer_id=canon_taut_idx,
+                )
+                species_registry.skipped_count += 1
+                species_registry.resonance_skipped_count += 1
+                if skipped_tautomer_id == canon_taut_idx:
+                    warnings.warn(
+                        f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
+                        f"within tautomer {skipped_tautomer_id} (degeneracy={degeneracy})."
+                    )
+                else:
+                    warnings.warn(
+                        f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
+                        f"under tautomer {skipped_tautomer_id}; canonical entry is "
+                        f"tautomer {canon_taut_idx} protomer {canon_prot_idx} "
+                        f"(degeneracy={degeneracy})."
+                    )
+                return False
 
         # Check for isomorphic within this tautomer when no species registry is used.
         existing_smiles = [canon_smiles(p.smiles) for p in self.protomers.values()]
@@ -400,6 +543,31 @@ class Species:
                 removed.append(taut_idx)
                 del self.tautomers[taut_idx]
         return removed
+
+    def reindex_protomers(self) -> dict[int, dict[int, int]]:
+        """
+        Compact kept protomer IDs within each tautomer after pruning.
+
+        Deduplication removes entries from each tautomer's protomer dictionary.
+        Reindexing keeps downstream logs, scratch folders, plots, and CSV exports
+        aligned with the retained protomer count.
+        """
+        remapped: dict[int, dict[int, int]] = {}
+        for taut_idx, tautomer in self.tautomers.items():
+            old_items = sorted(tautomer.protomers.items())
+            mapping = {
+                old_idx: new_idx
+                for new_idx, (old_idx, _protomer) in enumerate(old_items)
+                if old_idx != new_idx
+            }
+            if not mapping:
+                continue
+            tautomer.protomers = {
+                new_idx: protomer
+                for new_idx, (_old_idx, protomer) in enumerate(old_items)
+            }
+            remapped[taut_idx] = mapping
+        return remapped
     
     def get_all_smiles(self):
         smiles = []
@@ -553,6 +721,7 @@ class Species:
             "solvent",
             "degeneracy",
             "alternate_tautomer_ids",
+            "resonance_charge_forms",
 #            "connectivity_mismatch_error",
         ]
         for taut_idx, tautomer in self.tautomers.items():
@@ -574,6 +743,13 @@ class Species:
                 ):
                     row["alternate_tautomer_ids"] = ",".join(
                         str(taut_id) for taut_id in sorted(set(protomer.alternate_tautomer_ids))
+                    )
+                if (
+                    "resonance_charge_forms" not in row
+                    and protomer.resonance_charge_forms
+                ):
+                    row["resonance_charge_forms"] = json.dumps(
+                        protomer.resonance_charge_forms, sort_keys=True
                     )
                 rows.append(row)
 
