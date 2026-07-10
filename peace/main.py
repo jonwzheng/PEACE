@@ -760,6 +760,14 @@ if __name__ == "__main__":
     except ValueError as exc:
         parser.error(str(exc))
 
+    if args.solvation and not args.plot_from_csv:
+        from peace.calculators.xtb import verify_xtb_executable
+
+        try:
+            verify_xtb_executable(args.xtb_executable)
+        except ValueError as exc:
+            parser.error(str(exc))
+
     if args.plot_from_csv:
         _log(_header_banner())
         _log(f"Version: {__version__}")

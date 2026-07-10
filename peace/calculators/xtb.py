@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shlex
+import shutil
 import subprocess
 import sys
 import warnings
@@ -24,6 +26,48 @@ def report_xtb_fatal_and_exit(exc: XtbFatalError) -> None:
     """Print a fatal xTB error to stderr and terminate the program."""
     print(f"\n[ERROR] xTB calculation failed.\n{exc}", file=sys.stderr)
     raise SystemExit(1) from exc
+
+
+def verify_xtb_executable(xtb_executable: str, *, timeout: float = 30.0) -> None:
+    """Verify that an xTB binary exists and responds to ``--version``."""
+    exe = xtb_executable.strip()
+    if not exe:
+        raise ValueError("--xtb-executable must not be empty.")
+
+    if os.sep in exe or (os.altsep and os.altsep in exe):
+        path = Path(exe)
+        if not path.is_file():
+            raise ValueError(f"xTB executable not found: {exe}")
+        if not os.access(path, os.X_OK):
+            raise ValueError(f"xTB executable is not executable: {exe}")
+        resolved = str(path.resolve())
+    else:
+        found = shutil.which(exe)
+        if found is None:
+            raise ValueError(
+                f"xTB executable {exe!r} not found on PATH. "
+                "Provide a full path via --xtb-executable."
+            )
+        resolved = found
+
+    try:
+        completed = subprocess.run(
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except OSError as exc:
+        raise ValueError(f"Failed to run xTB executable {exe!r}: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"xTB --version timed out after {timeout}s for {exe!r}.") from exc
+
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        detail = stderr or stdout or f"exit code {completed.returncode}"
+        raise ValueError(f"xTB --version failed for {exe!r}: {detail}")
 
 
 def collect_xtb_log_text(
