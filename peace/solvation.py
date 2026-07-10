@@ -18,7 +18,7 @@ from rdkit.Chem import AllChem, rdDetermineBonds
 
 from prism_pruner.pruner import prune
 
-from .logging_utils import LogLevel, emit_progress
+from .logging_utils import LogLevel, emit_progress, record_user_warning
 from .calculators import (
     XtbFatalError,
     report_xtb_fatal_and_exit,
@@ -648,9 +648,12 @@ def _report_optimization_event(
     *,
     status: str,
     message: str,
+    user_warning: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     _log_status(log_paths, status, message)
+    if user_warning:
+        record_user_warning(message)
     emit_progress(
         progress_callback,
         message,
@@ -717,8 +720,11 @@ def _run_optimization_with_convergence_retry(
                     status="WARN",
                     message=(
                         f"{engine} optimization still has connectivity mismatch after "
-                        f"relaxed retry at convergence={level} (initial={opt_level})"
+                        f"relaxed retry at convergence={level} (initial={opt_level}); "
+                        "the optimized geometry is potentially unsafe and the caller will "
+                        "discard it or fall back to a safer geometry"
                     ),
+                    user_warning=True,
                     progress_callback=progress_callback,
                 )
             return result
@@ -848,6 +854,7 @@ def _try_gxtb_gas_phase_refinement(
 
     def _fallback_sp_on_alpb(reason: str) -> GxtbRefinementResult:
         _log_status(log_paths, "WARN", reason)
+        record_user_warning(reason, context="g-xTB gas-phase refinement fallback")
         _progress("computing g-xTB gas-phase single point on GFN2-xTB/ALPB geometry (fallback)")
         fallback_scratch = scratch_dir / "gxtb_sp_fallback"
         fallback_xyz = _prepare_scratch_xyz(fallback_scratch, alpb_xyz_path, "input.xyz")
@@ -1933,11 +1940,12 @@ def _run_single_conformer_workflow(
 
         reference_mol = _input_mol_for_connectivity(protomer, mol)
         if not _xyz_connectivity_matches_reference(opt_xyz_path, reference_mol):
-            _log_status(
-                log_paths,
-                "WARN",
-                "GFN2-xTB/ALPB optimization connectivity mismatch against input mol; discarding conformer",
+            warning_message = (
+                "GFN2-xTB/ALPB optimization connectivity mismatch against input mol; "
+                "discarding conformer and excluding its energies from the conformer pool"
             )
+            _log_status(log_paths, "WARN", warning_message)
+            record_user_warning(warning_message, context="conformer refinement")
             terms.workflow_status = "connectivity-failed"
             terms.gas_sp_energy_kcal_mol = _format_energy_entry(None, failed_step="connectivity")
             terms.solvation_free_energy_kcal_mol = _format_energy_entry(None, failed_step="connectivity")

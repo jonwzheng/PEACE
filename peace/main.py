@@ -3,7 +3,15 @@ from peace.engine import ChargeEngine
 from peace.common import canon_smiles, show_images, protonate_at_site, deprotonate_at_site
 from peace import visualization
 from peace import __version__
-from peace.logging_utils import LogLevel, log, set_log_level, workflow_bracket_label
+from peace.logging_utils import (
+    LogLevel,
+    clear_user_warnings,
+    log,
+    log_user_warning_summary,
+    set_crash_on_warning,
+    set_log_level,
+    workflow_bracket_label,
+)
 from datetime import datetime
 import time
 from pathlib import Path
@@ -242,11 +250,11 @@ def _build_cli_parser():
         help="Console log verbosity: default, verbose, or debug.",
     )
     p.add_argument(
-        "--skip-single-protomer-solvation", # TODO: make apply for post-screening step
+        "--crash-on-warning",
         action="store_true",
         help=(
-            "With --solvation, skip screening/optimization for species that have exactly one tautomer "
-            "and one protomer; assign default solution-phase free energy of -10000 kcal/mol."
+            "Abort immediately when PEACE records a user-facing warning about "
+            "potentially unsafe fallback or recovery behavior."
         ),
     )
     p.add_argument(
@@ -774,7 +782,9 @@ if __name__ == "__main__":
     start_ts = time.time()
     parser = _build_cli_parser()
     args = parser.parse_args()
+    clear_user_warnings()
     set_log_level(args.log_level)
+    set_crash_on_warning(bool(args.crash_on_warning))
     if int(args.charge_min) > int(args.charge_max):
         parser.error("--charge-min must be <= --charge-max")
     if args.plot in ("cutoff", "count") and args.plot_filter is None:
@@ -974,242 +984,225 @@ if __name__ == "__main__":
                 / f"species_{input_species_key}"
                 / f"charge_{charge_state}"
             )
-            skip_single = (
-                bool(args.skip_single_protomer_solvation)
-                and len(tautomer_items) == 1
-                and total_protomers == 1
+
+            if species_scratch.exists():
+                if args.override_solvation:
+                    log(f"Override enabled: removing existing optimization folder {species_scratch}")
+                    shutil.rmtree(species_scratch, ignore_errors=True)
+                else:
+                    raise FileExistsError(
+                        "Existing solvation results detected. "
+                        f"Found existing charge folder: {species_scratch}. "
+                        "Use --override-solvation to delete prior results and rerun."
+                    )
+            species_scratch.mkdir(parents=True, exist_ok=True)
+
+            all_protomer_refs = [
+                (taut_idx, prot_idx, protomer)
+                for taut_idx, taut in tautomer_items
+                for prot_idx, protomer in taut.protomers.items()
+            ]
+
+            log(f" *** GENERATING CONFORMERS FOR ALL PROTOMERS (charge={charge_state}) *** ")
+            run_batch_conformer_generation(
+                all_protomer_refs,
+                conformer_mode=args.conformer_mode,
+                external_xyz_path=args.external_xyz,
+                scratch_root=species_scratch / "conformer_generation",
+                dry_run=bool(args.dry_run),
+                progress_callback=lambda stage, level=LogLevel.VERBOSE: log(
+                    f"  [conformers] {stage}",
+                    level=level,
+                ),
             )
 
-            if skip_single:
-                only_protomer = tautomer_items[0][1].protomers[0]
-                if only_protomer.mol is not None:
-                    only_protomer.mol.SetDoubleProp("solution_phase_free_energy_kcal_mol", -10000.0)
-                    only_protomer.mol.SetProp("workflow_status", "single_protomer_default_energy")
-                    only_protomer.mol.SetProp("solvent", solvent.alpb)
-                log(
-                    "Skipping solvation workflow for single-tautomer/single-protomer species "
-                    f"(charge={charge_state}); assigned default solution-phase free energy = -10000.0 kcal/mol."
+            log(f" *** SCREENING PROTOMERS (charge={charge_state}) ON KDG GEOMETRIES... *** ")
+            screening_records: list[tuple[int, int, Any, Optional[float]]] = []
+            for taut_idx, prot_idx, protomer in all_protomer_refs:
+                n_prot = len(spec.tautomers[taut_idx].protomers)
+                prefix = _workflow_log_prefix(
+                    charge_state,
+                    taut_idx,
+                    len(tautomer_items),
+                    prot_idx,
+                    n_prot,
                 )
-            else:
-                if species_scratch.exists():
-                    if args.override_solvation:
-                        log(f"Override enabled: removing existing optimization folder {species_scratch}")
-                        shutil.rmtree(species_scratch, ignore_errors=True)
-                    else:
-                        raise FileExistsError(
-                            "Existing solvation results detected. "
-                            f"Found existing charge folder: {species_scratch}. "
-                            "Use --override-solvation to delete prior results and rerun."
-                        )
-                species_scratch.mkdir(parents=True, exist_ok=True)
-
-                all_protomer_refs = [
-                    (taut_idx, prot_idx, protomer)
-                    for taut_idx, taut in tautomer_items
-                    for prot_idx, protomer in taut.protomers.items()
-                ]
-
-                log(f" *** GENERATING CONFORMERS FOR ALL PROTOMERS (charge={charge_state}) *** ")
-                run_batch_conformer_generation(
-                    all_protomer_refs,
-                    conformer_mode=args.conformer_mode,
+                log(f"Screening {workflow_bracket_label(prefix, protomer.smiles)}")
+                screening_result = run_protomer_screening(
+                    protomer,
+                    protomer_id=f"{prot_idx}_screen",
+                    scratch_root=species_scratch / f"tautomer_{taut_idx}" / "screening",
+                    conformer_mode="skip_search",
                     external_xyz_path=args.external_xyz,
-                    scratch_root=species_scratch / "conformer_generation",
+                    optimization_engine=args.optimization_engine,
+                    opt_level=args.opt_level,
+                    xtb_version=args.xtb_version,
+                    xtb_executable=args.xtb_executable,
+                    solvent=solvent,
+                    keep_scratch=bool(args.keep_scratch),
+                    keep_logs=bool(args.keep_logs),
                     dry_run=bool(args.dry_run),
-                    progress_callback=lambda stage, level=LogLevel.VERBOSE: log(
-                        f"  [conformers] {stage}",
+                    progress_callback=lambda stage, prefix=prefix, level=LogLevel.VERBOSE: log(
+                        f"  {workflow_bracket_label(prefix)} {stage}",
                         level=level,
                     ),
                 )
-
-                log(f" *** SCREENING PROTOMERS (charge={charge_state}) ON KDG GEOMETRIES... *** ")
-                screening_records: list[tuple[int, int, Any, Optional[float]]] = []
-                for taut_idx, prot_idx, protomer in all_protomer_refs:
-                    n_prot = len(spec.tautomers[taut_idx].protomers)
-                    prefix = _workflow_log_prefix(
-                        charge_state,
+                screening_records.append(
+                    (
                         taut_idx,
-                        len(tautomer_items),
                         prot_idx,
-                        n_prot,
-                    )
-                    log(f"Screening {workflow_bracket_label(prefix, protomer.smiles)}")
-                    screening_result = run_protomer_screening(
                         protomer,
-                        protomer_id=f"{prot_idx}_screen",
-                        scratch_root=species_scratch / f"tautomer_{taut_idx}" / "screening",
-                        conformer_mode="skip_search",
-                        external_xyz_path=args.external_xyz,
-                        optimization_engine=args.optimization_engine,
-                        opt_level=args.opt_level,
-                        xtb_version=args.xtb_version,
-                        xtb_executable=args.xtb_executable,
-                        solvent=solvent,
-                        keep_scratch=bool(args.keep_scratch),
-                        keep_logs=bool(args.keep_logs),
-                        dry_run=bool(args.dry_run),
-                        progress_callback=lambda stage, prefix=prefix, level=LogLevel.VERBOSE: log(
-                            f"  {workflow_bracket_label(prefix)} {stage}",
-                            level=level,
-                        ),
+                        screening_result.solution_phase_free_energy_kcal_mol,
                     )
-                    screening_records.append(
-                        (
-                            taut_idx,
-                            prot_idx,
-                            protomer,
-                            screening_result.solution_phase_free_energy_kcal_mol,
-                        )
-                    )
-
-                valid_screening = [row for row in screening_records if row[3] is not None]
-                min_screening_solution_energy = min((row[3] for row in valid_screening), default=None)
-                if min_screening_solution_energy is None:
-                    log("Screening did not produce any valid solution-phase energies; keeping all protomers for full optimization.")
-
-                protomers_to_optimize: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
-                screened_out: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
-                for taut_idx, prot_idx, protomer, screening_energy in screening_records:
-                    screen_delta = _compute_screen_delta(screening_energy, min_screening_solution_energy)
-                    if (
-                        screen_delta is not None
-                        and screen_delta > float(args.screen_threshold)
-                    ):
-                        screened_out.append((taut_idx, prot_idx, protomer, screening_energy, screen_delta))
-                    else:
-                        protomers_to_optimize.append((taut_idx, prot_idx, protomer, screening_energy, screen_delta))
-
-                log(
-                    "Screening finished: "
-                    f"kept={len(protomers_to_optimize)} "
-                    f"excluded={len(screened_out)} "
-                    f"threshold={float(args.screen_threshold):.2f} kcal/mol"
                 )
 
-                log(" *** CONFORMER REFINEMENT FOR SCREENED-IN PROTOMERS ***")
-                for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
-                    protomer_items = list(spec.tautomers[taut_idx].protomers.items())
-                    prefix = _workflow_log_prefix(
-                        charge_state,
-                        taut_idx,
-                        len(tautomer_items),
-                        prot_idx,
-                        len(protomer_items),
-                    )
-                    log(f"Refining conformers {workflow_bracket_label(prefix, protomer.smiles)}")
-                    run_protomer_solvation(
-                        protomer,
-                        protomer_id=str(prot_idx),
-                        scratch_root=species_scratch / f"tautomer_{taut_idx}",
-                        conformer_mode="skip_search",
-                        external_xyz_path=args.external_xyz,
-                        optimization_engine=args.optimization_engine,
-                        keep_scratch=bool(args.keep_scratch),
-                        keep_logs=bool(args.keep_logs),
-                        sp_energy=args.sp_energy,
-                        gxtb_optimize=bool(not args.no_gxtb_optimize),
-                        xtb_version=args.xtb_version,
-                        xtb_executable=args.xtb_executable,
-                        solvent=solvent,
-                        dry_run=bool(args.dry_run),
-                        opt_level=args.opt_level,
-                        max_qm_conformers=int(args.max_conformers),
-                        embedded_conformers=args.embedded_conformers,
-                        conformer_energy_threshold_kcal_mol=float(args.conformer_energy_threshold),
-                        log_prefix=prefix,
-                        progress_callback=lambda stage, level=LogLevel.DEFAULT: log(
-                            f"  {stage}",
-                            level=level,
-                        ),
-                    )
-        
+            valid_screening = [row for row in screening_records if row[3] is not None]
+            min_screening_solution_energy = min((row[3] for row in valid_screening), default=None)
+            if min_screening_solution_energy is None:
+                log("Screening did not produce any valid solution-phase energies; keeping all protomers for full optimization.")
 
-                optimized_energies = [
-                    protomer.mol.GetDoubleProp("solution_phase_free_energy_kcal_mol")
-                    for _taut_idx, _prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize
-                    if protomer.mol is not None and protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
-                ]
-                min_postopt_solution_energy = min(optimized_energies) if optimized_energies else None
-                if min_postopt_solution_energy is None:
-                    log("No valid post-optimization solution energies found to backfill screened-out protomers.")
+            protomers_to_optimize: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
+            screened_out: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
+            for taut_idx, prot_idx, protomer, screening_energy in screening_records:
+                screen_delta = _compute_screen_delta(screening_energy, min_screening_solution_energy)
+                if (
+                    screen_delta is not None
+                    and screen_delta > float(args.screen_threshold)
+                ):
+                    screened_out.append((taut_idx, prot_idx, protomer, screening_energy, screen_delta))
+                else:
+                    protomers_to_optimize.append((taut_idx, prot_idx, protomer, screening_energy, screen_delta))
 
-                # Backfill screened-in protomers that failed conformer refinement.
-                for taut_idx, prot_idx, protomer, screening_energy, screen_delta in protomers_to_optimize:
-                    if protomer.mol is None:
-                        continue
-                    has_final_energy = protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
-                    if has_final_energy:
-                        continue
-                    placeholder_energy = _assign_screening_placeholder(
-                        protomer,
-                        screening_energy=screening_energy,
-                        screen_delta=screen_delta,
-                        baseline_energy=min_postopt_solution_energy,
-                    )
-                    if placeholder_energy is None:
-                        continue
-                    protomer.mol.SetProp("screening_placeholder_from_failed_postopt", "true")
-                    if not protomer.mol.HasProp("workflow_status"):
-                        protomer.mol.SetProp("workflow_status", "selected_but_postopt_failed")
-                    log(
-                        "Backfilled screened-in protomer with placeholder energy "
-                        f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
-                        f"screen_delta={screen_delta} "
-                        f"placeholder_solution_energy={placeholder_energy}"
-                    )
-
-                for taut_idx, prot_idx, protomer, screening_energy, screen_delta in screened_out:
-                    if protomer.mol is None:
-                        continue
-                    protomer.mol.SetProp("screening_skipped_postopt", "true")
-                    placeholder_energy = _assign_screening_placeholder(
-                        protomer,
-                        screening_energy=screening_energy,
-                        screen_delta=screen_delta,
-                        baseline_energy=min_postopt_solution_energy,
-                    )
-                    protomer.mol.SetProp("workflow_status", "post_xtb_screened_out")
-                    log(
-                        "Screened out protomer "
-                        f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
-                        f"screen_delta={screen_delta} "
-                        f"placeholder_solution_energy={placeholder_energy}",
-                        level=LogLevel.VERBOSE,
-                    )
-
-            if not skip_single:
-                log(f"Optimization outputs saved under: {species_scratch}")
-
-            log(f"Calculating Boltzmann populations for charge={charge_state}")
-            excluded_unconverged_count = 0
-            if args.exclude_unconverged:
-                for taut in tautomer_items:
-                    for protomer in taut[1].protomers.values():
-                        if (
-                            protomer.mol is not None
-                            and protomer.mol.HasProp("connectivity_mismatch")
-                            and protomer.mol.GetProp("connectivity_mismatch").lower() == "true"
-                        ):
-                            excluded_unconverged_count += 1
-                log(
-                    "Excluding connectivity-mismatch protomers from Boltzmann weighting: "
-                    f"count={excluded_unconverged_count}"
-                )
-            spec.assign_boltzmann_microstate_populations(
-                temperature_k=298.15,
-                exclude_connectivity_mismatch=bool(args.exclude_unconverged),
+            log(
+                "Screening finished: "
+                f"kept={len(protomers_to_optimize)} "
+                f"excluded={len(screened_out)} "
+                f"threshold={float(args.screen_threshold):.2f} kcal/mol"
             )
-            f_zwit = spec.get_f_zwit()
-            log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.16f}")
-            for taut_idx, taut in tautomer_items:
-                log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
-                for prot_idx, protomer in taut.protomers.items():
-                    frac = (
-                        protomer.mol.GetProp("boltzmann_fraction")
-                        if protomer.mol is not None and protomer.mol.HasProp("boltzmann_fraction")
-                        else "N/A"
-                    )
-                    log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)} ({protomer.smiles}): {frac}")
+
+            log(" *** CONFORMER REFINEMENT FOR SCREENED-IN PROTOMERS ***")
+            for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
+                protomer_items = list(spec.tautomers[taut_idx].protomers.items())
+                prefix = _workflow_log_prefix(
+                    charge_state,
+                    taut_idx,
+                    len(tautomer_items),
+                    prot_idx,
+                    len(protomer_items),
+                )
+                log(f"Refining conformers {workflow_bracket_label(prefix, protomer.smiles)}")
+                run_protomer_solvation(
+                    protomer,
+                    protomer_id=str(prot_idx),
+                    scratch_root=species_scratch / f"tautomer_{taut_idx}",
+                    conformer_mode="skip_search",
+                    external_xyz_path=args.external_xyz,
+                    optimization_engine=args.optimization_engine,
+                    keep_scratch=bool(args.keep_scratch),
+                    keep_logs=bool(args.keep_logs),
+                    sp_energy=args.sp_energy,
+                    gxtb_optimize=bool(not args.no_gxtb_optimize),
+                    xtb_version=args.xtb_version,
+                    xtb_executable=args.xtb_executable,
+                    solvent=solvent,
+                    dry_run=bool(args.dry_run),
+                    opt_level=args.opt_level,
+                    max_qm_conformers=int(args.max_conformers),
+                    embedded_conformers=args.embedded_conformers,
+                    conformer_energy_threshold_kcal_mol=float(args.conformer_energy_threshold),
+                    log_prefix=prefix,
+                    progress_callback=lambda stage, level=LogLevel.DEFAULT: log(
+                        f"  {stage}",
+                        level=level,
+                    ),
+                )
+    
+
+            optimized_energies = [
+                protomer.mol.GetDoubleProp("solution_phase_free_energy_kcal_mol")
+                for _taut_idx, _prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize
+                if protomer.mol is not None and protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
+            ]
+            min_postopt_solution_energy = min(optimized_energies) if optimized_energies else None
+            if min_postopt_solution_energy is None:
+                log("No valid post-optimization solution energies found to backfill screened-out protomers.")
+
+            # Backfill screened-in protomers that failed conformer refinement.
+            for taut_idx, prot_idx, protomer, screening_energy, screen_delta in protomers_to_optimize:
+                if protomer.mol is None:
+                    continue
+                has_final_energy = protomer.mol.HasProp("solution_phase_free_energy_kcal_mol")
+                if has_final_energy:
+                    continue
+                placeholder_energy = _assign_screening_placeholder(
+                    protomer,
+                    screening_energy=screening_energy,
+                    screen_delta=screen_delta,
+                    baseline_energy=min_postopt_solution_energy,
+                )
+                if placeholder_energy is None:
+                    continue
+                protomer.mol.SetProp("screening_placeholder_from_failed_postopt", "true")
+                if not protomer.mol.HasProp("workflow_status"):
+                    protomer.mol.SetProp("workflow_status", "selected_but_postopt_failed")
+                log(
+                    "Backfilled screened-in protomer with placeholder energy "
+                    f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
+                    f"screen_delta={screen_delta} "
+                    f"placeholder_solution_energy={placeholder_energy}"
+                )
+
+            for taut_idx, prot_idx, protomer, screening_energy, screen_delta in screened_out:
+                if protomer.mol is None:
+                    continue
+                protomer.mol.SetProp("screening_skipped_postopt", "true")
+                placeholder_energy = _assign_screening_placeholder(
+                    protomer,
+                    screening_energy=screening_energy,
+                    screen_delta=screen_delta,
+                    baseline_energy=min_postopt_solution_energy,
+                )
+                protomer.mol.SetProp("workflow_status", "post_xtb_screened_out")
+                log(
+                    "Screened out protomer "
+                    f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
+                    f"screen_delta={screen_delta} "
+                    f"placeholder_solution_energy={placeholder_energy}",
+                    level=LogLevel.VERBOSE,
+                )
+
+        log(f"Optimization outputs saved under: {species_scratch}")
+
+        log(f"Calculating Boltzmann populations for charge={charge_state}")
+        excluded_unconverged_count = 0
+        if args.exclude_unconverged:
+            for taut in tautomer_items:
+                for protomer in taut[1].protomers.values():
+                    if (
+                        protomer.mol is not None
+                        and protomer.mol.HasProp("connectivity_mismatch")
+                        and protomer.mol.GetProp("connectivity_mismatch").lower() == "true"
+                    ):
+                        excluded_unconverged_count += 1
+            log(
+                "Excluding connectivity-mismatch protomers from Boltzmann weighting: "
+                f"count={excluded_unconverged_count}"
+            )
+        spec.assign_boltzmann_microstate_populations(
+            temperature_k=298.15,
+            exclude_connectivity_mismatch=bool(args.exclude_unconverged),
+        )
+        f_zwit = spec.get_f_zwit()
+        log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.16f}")
+        for taut_idx, taut in tautomer_items:
+            log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
+            for prot_idx, protomer in taut.protomers.items():
+                frac = (
+                    protomer.mol.GetProp("boltzmann_fraction")
+                    if protomer.mol is not None and protomer.mol.HasProp("boltzmann_fraction")
+                    else "N/A"
+                )
+                log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)} ({protomer.smiles}): {frac}")
 
     frames = []
     for charge_state in requested_charges:
@@ -1268,5 +1261,6 @@ if __name__ == "__main__":
                 log("No protomer images produced for this charge state.")
 
     end_ts = time.time()
+    log_user_warning_summary()
     log(f"Run finished at: {_ts()}")
     log(f"Execution time: {end_ts - start_ts:.2f} s")
