@@ -2276,7 +2276,6 @@ def run_protomer_screening(
             log_paths=log_paths,
             progress_callback=_progress,
         )
-        _mark_scf_retry_from_scratch(protomer, scratch_dir)
         terms = workflow_result.terms
         _persist_conformer_ensemble_results(
             protomer,
@@ -2575,7 +2574,6 @@ def run_protomer_solvation(
                 log_paths=log_paths,
                 progress_callback=_conf_progress,
             )
-            _mark_scf_retry_from_scratch(conf_protomer, conf_scratch)
             _copy_warning_flags_from_conformer(protomer, conf_protomer)
             run_records.append((conf_label, workflow_result.terms))
             if isinstance(workflow_result.terms.solution_phase_free_energy_kcal_mol, (int, float)):
