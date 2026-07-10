@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "peace"
+version = "0.1.0"
+description = "Protomer Enumeration And Charge Engine"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "rdkit",
+    "pandas",
+    "numpy",
+    "pillow",
+    "prism-pruner",
+    "matplotlib",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["peace*"]
