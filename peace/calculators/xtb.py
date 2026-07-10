@@ -17,6 +17,7 @@ XTB_ERROR_MARKER = "[ERROR]"
 XTB_INPUT_WARNING_MARKER = "[WARNING] Please study the warnings concerning your input carefully"
 GXTB_STABLE_RELEASE_URL = "https://github.com/grimme-lab/g-xtb/releases/tag/v2.0.1"
 XTB_SCF_ETEMP_RETRY_K = 1000.0
+XTB_SCF_RETRY_MARKER_FILE = "peace_xtb_scf_retry.flag"
 XTB_NATIVE_LOG_NAMES = ("xtb.log", "xtbout", "xtbopt.log", "xtb.out")
 
 
@@ -208,6 +209,12 @@ def run_xtb_command(
         retry_log_text = collect_xtb_log_text(cwd, retry_completed)
         _raise_if_xtb_input_warning(cmd=retry_cmd, log_text=retry_log_text)
         if not has_xtb_fatal_error(retry_log_text):
+            marker_path = cwd / XTB_SCF_RETRY_MARKER_FILE
+            marker_path.write_text(
+                f"SCF convergence failure recovered with --etemp {etemp_retry_k}\n",
+                encoding="utf-8",
+            )
+            setattr(retry_completed, "peace_scf_retry", True)
             return retry_completed
         raise XtbFatalError(
             _format_xtb_fatal_message(

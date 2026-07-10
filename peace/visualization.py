@@ -52,6 +52,10 @@ class ProtomerPlotEntry:
     delta_g_kcal_mol: Optional[float] = None
     workflow_status: str = ""
     workflow_error: str = ""
+    screening_skipped_postopt: bool = False
+    scf_convergence_retry: bool = False
+    geometry_reoptimization_retry: bool = False
+    geometry_fallback: bool = False
     connectivity_mismatch: bool = False
     solvent: str = ""
 
@@ -79,18 +83,8 @@ def _optional_str(value) -> str:
     return str(value).strip()
 
 
-def _is_relaxed_convergence_status(status: str) -> bool:
-    return status.startswith("optimization_retried_with_convergence:")
-
-
-def _has_workflow_issue(entry: ProtomerPlotEntry) -> bool:
-    if entry.connectivity_mismatch:
-        return True
-    if entry.workflow_error:
-        return True
-    if entry.workflow_status and not _is_relaxed_convergence_status(entry.workflow_status):
-        return True
-    return False
+def _is_geometry_reoptimization_status(status: str) -> bool:
+    return status.startswith("geometry_reoptimized_with_convergence:")
 
 
 def _has_reported_thermo(entry: ProtomerPlotEntry) -> bool:
@@ -108,17 +102,20 @@ def _species_has_thermo(entries: list[ProtomerPlotEntry]) -> bool:
 def _issue_marker(entry: ProtomerPlotEntry, *, species_has_thermo: bool) -> Optional[str]:
     if not species_has_thermo:
         return None
-    issue = _has_workflow_issue(entry)
-    has_thermo = _has_reported_thermo(entry)
-    if issue and not has_thermo:
-        return "*"
-    if issue and has_thermo:
-        return "!"
-    if not has_thermo:
-        return "*"
-    if _is_relaxed_convergence_status(entry.workflow_status):
-        return "/"
-    return None
+    markers = []
+    if entry.screening_skipped_postopt or entry.workflow_status == "post_xtb_screened_out":
+        markers.append("X")
+    if entry.scf_convergence_retry:
+        markers.append("*")
+    if (
+        entry.geometry_reoptimization_retry
+        or entry.geometry_fallback
+        or entry.connectivity_mismatch
+        or _is_geometry_reoptimization_status(entry.workflow_status)
+        or entry.workflow_status == "connectivity-failed"
+    ):
+        markers.append("!")
+    return "".join(markers) or None
 
 
 def _format_fraction_pct(fraction: float) -> str:
@@ -182,6 +179,10 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
             delta_g = None
             workflow_status = ""
             workflow_error = ""
+            screening_skipped_postopt = False
+            scf_convergence_retry = False
+            geometry_reoptimization_retry = False
+            geometry_fallback = False
             connectivity_mismatch = False
             solvent = ""
             if protomer.mol is not None:
@@ -197,6 +198,16 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     workflow_status = _optional_str(protomer.mol.GetProp("workflow_status"))
                 if protomer.mol.HasProp("workflow_error"):
                     workflow_error = _optional_str(protomer.mol.GetProp("workflow_error"))
+                if protomer.mol.HasProp("screening_skipped_postopt"):
+                    screening_skipped_postopt = _optional_bool(protomer.mol.GetProp("screening_skipped_postopt"))
+                if protomer.mol.HasProp("scf_convergence_retry"):
+                    scf_convergence_retry = _optional_bool(protomer.mol.GetProp("scf_convergence_retry"))
+                if protomer.mol.HasProp("geometry_reoptimization_retry"):
+                    geometry_reoptimization_retry = _optional_bool(
+                        protomer.mol.GetProp("geometry_reoptimization_retry")
+                    )
+                if protomer.mol.HasProp("geometry_fallback"):
+                    geometry_fallback = _optional_bool(protomer.mol.GetProp("geometry_fallback"))
                 if protomer.mol.HasProp("connectivity_mismatch"):
                     connectivity_mismatch = _optional_bool(protomer.mol.GetProp("connectivity_mismatch"))
                 if protomer.mol.HasProp("solvent"):
@@ -216,6 +227,10 @@ def entries_from_species(spec: Species, *, formal_charge: Optional[int] = None) 
                     delta_g_kcal_mol=delta_g,
                     workflow_status=workflow_status,
                     workflow_error=workflow_error,
+                    screening_skipped_postopt=screening_skipped_postopt,
+                    scf_convergence_retry=scf_convergence_retry,
+                    geometry_reoptimization_retry=geometry_reoptimization_retry,
+                    geometry_fallback=geometry_fallback,
                     connectivity_mismatch=connectivity_mismatch,
                     solvent=solvent,
                 )
@@ -247,6 +262,10 @@ def entries_from_dataframe(df: pd.DataFrame) -> list[ProtomerPlotEntry]:
                 delta_g_kcal_mol=_optional_float(row_dict.get("delta_g_kcal_mol")),
                 workflow_status=_optional_str(row_dict.get("workflow_status")),
                 workflow_error=_optional_str(row_dict.get("workflow_error")),
+                screening_skipped_postopt=_optional_bool(row_dict.get("screening_skipped_postopt")),
+                scf_convergence_retry=_optional_bool(row_dict.get("scf_convergence_retry")),
+                geometry_reoptimization_retry=_optional_bool(row_dict.get("geometry_reoptimization_retry")),
+                geometry_fallback=_optional_bool(row_dict.get("geometry_fallback")),
                 connectivity_mismatch=_optional_bool(row_dict.get("connectivity_mismatch")),
                 solvent=_optional_str(row_dict.get("solvent")),
             )
@@ -423,7 +442,7 @@ def _draw_issue_marker(img: Image.Image, marker: Optional[str]) -> Image.Image:
     overlay = img.copy()
     draw = ImageDraw.Draw(overlay)
     font = _load_font(size=_FONT_SIZE + 4)
-    color = "#b45309" if marker == "!" else "#2563eb" if marker == "/" else "#b91c1c"
+    color = "#b45309" if "!" in marker else "#2563eb" if "*" in marker else "#b91c1c"
     tw = draw.textlength(marker, font=font)
     x = img.width - tw - 8
     y = 4

@@ -33,6 +33,7 @@ from .calculators import (
     run_xtb_command,
     run_xtb_optimization,
 )
+from .calculators.xtb import XTB_SCF_RETRY_MARKER_FILE
 from .calculators.common import opt_convergence_retry_levels
 from .protomer import Protomer, Species, Tautomer
 from .solvents import SolventNames, resolve_solvent
@@ -559,6 +560,7 @@ def _mol_from_conf_id(mol_h: Chem.Mol, conf_id: int, *, remove_hydrogens: bool =
 
 
 _RELAXED_OPT_WORKFLOW_STATUS_PREFIX = "optimization_retried_with_convergence:"
+_GEOMETRY_REOPT_WORKFLOW_STATUS_PREFIX = "geometry_reoptimized_with_convergence:"
 
 
 def _reset_optimization_artifacts(scratch_dir: Path) -> None:
@@ -574,6 +576,7 @@ def _mark_relaxed_optimization(
     retried_opt_level: str,
     initial_opt_level: str,
     engine: str,
+    geometry_retry: bool = False,
 ) -> None:
     _set_optimization_convergence_props(
         protomer,
@@ -581,6 +584,7 @@ def _mark_relaxed_optimization(
         initial_opt_level=initial_opt_level,
         engine=engine,
         relaxed_retry=True,
+        geometry_retry=geometry_retry,
     )
 
 
@@ -591,18 +595,54 @@ def _set_optimization_convergence_props(
     initial_opt_level: str,
     engine: str,
     relaxed_retry: bool = False,
+    geometry_retry: bool = False,
 ) -> None:
     if protomer.mol is None:
         return
     _set_mol_prop_str(protomer.mol, "optimization_opt_level", opt_level)
     _set_mol_prop_str(protomer.mol, "optimization_initial_opt_level", initial_opt_level)
     _set_mol_prop_str(protomer.mol, "optimization_engine", engine)
-    if relaxed_retry:
+    if geometry_retry:
+        _set_mol_prop_bool(protomer.mol, "geometry_reoptimization_retry", True)
+        _set_mol_prop_str(protomer.mol, "optimization_retry_reason", "connectivity_mismatch")
+        _set_mol_prop_str(
+            protomer.mol,
+            "workflow_status",
+            f"{_GEOMETRY_REOPT_WORKFLOW_STATUS_PREFIX}{opt_level}",
+        )
+    if relaxed_retry and not geometry_retry:
         _set_mol_prop_str(
             protomer.mol,
             "workflow_status",
             f"{_RELAXED_OPT_WORKFLOW_STATUS_PREFIX}{opt_level}",
         )
+
+
+def _scratch_has_scf_retry_marker(scratch_dir: Path) -> bool:
+    return any(scratch_dir.rglob(XTB_SCF_RETRY_MARKER_FILE))
+
+
+def _mark_scf_retry_from_scratch(protomer: Protomer, scratch_dir: Path) -> None:
+    if protomer.mol is None or not _scratch_has_scf_retry_marker(scratch_dir):
+        return
+    _set_mol_prop_bool(protomer.mol, "scf_convergence_retry", True)
+
+
+def _optional_bool_prop(mol: Chem.Mol, key: str) -> bool:
+    return mol.HasProp(key) and mol.GetProp(key).strip().lower() in {"true", "1", "yes"}
+
+
+def _copy_warning_flags_from_conformer(protomer: Protomer, conformer_protomer: Protomer) -> None:
+    if protomer.mol is None or conformer_protomer.mol is None:
+        return
+    for key in (
+        "scf_convergence_retry",
+        "geometry_reoptimization_retry",
+        "geometry_fallback",
+        "connectivity_mismatch",
+    ):
+        if _optional_bool_prop(conformer_protomer.mol, key):
+            _set_mol_prop_bool(protomer.mol, key, True)
 
 
 def _all_atom_connectivity_signature(mol: Chem.Mol) -> set[tuple[int, int]]:
@@ -672,6 +712,7 @@ def _run_optimization_with_convergence_retry(
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> tuple[Path, Optional[float], Optional[float]]:
     levels = opt_convergence_retry_levels(opt_level)
+    geometry_retry_attempted = False
 
     for attempt_idx, level in enumerate(levels):
         if attempt_idx > 0:
@@ -695,8 +736,10 @@ def _run_optimization_with_convergence_retry(
             raise
 
         opt_xyz_path, *_ = result
+        _mark_scf_retry_from_scratch(protomer, scratch_dir)
         if _has_connectivity_mismatch(protomer, opt_xyz_path):
             if attempt_idx < len(levels) - 1:
+                geometry_retry_attempted = True
                 next_level = levels[attempt_idx + 1]
                 _report_optimization_event(
                     log_paths,
@@ -714,6 +757,7 @@ def _run_optimization_with_convergence_retry(
                     retried_opt_level=level,
                     initial_opt_level=opt_level,
                     engine=engine,
+                    geometry_retry=True,
                 )
                 _report_optimization_event(
                     log_paths,
@@ -733,6 +777,7 @@ def _run_optimization_with_convergence_retry(
                 retried_opt_level=level,
                 initial_opt_level=opt_level,
                 engine=engine,
+                geometry_retry=geometry_retry_attempted,
             )
             _report_optimization_event(
                 log_paths,
@@ -853,6 +898,8 @@ def _try_gxtb_gas_phase_refinement(
     def _fallback_sp_on_alpb(reason: str) -> GxtbRefinementResult:
         _log_status(log_paths, "WARN", reason)
         record_user_warning(reason, context="g-xTB gas-phase refinement fallback")
+        if protomer.mol is not None:
+            _set_mol_prop_bool(protomer.mol, "geometry_fallback", True)
         _progress("computing g-xTB gas-phase single point on GFN2-xTB/ALPB geometry (fallback)")
         fallback_scratch = scratch_dir / "gxtb_sp_fallback"
         fallback_xyz = _prepare_scratch_xyz(fallback_scratch, alpb_xyz_path, "input.xyz")
@@ -1095,6 +1142,10 @@ def _set_mol_prop_str(mol: Chem.Mol, key: str, value: Optional[str]) -> None:
     if value is None:
         return
     mol.SetProp(key, value)
+
+
+def _set_mol_prop_bool(mol: Chem.Mol, key: str, value: bool) -> None:
+    mol.SetProp(key, "true" if value else "false")
 
 
 def _set_mol_prop_double(mol: Chem.Mol, key: str, value: Optional[float]) -> None:
@@ -1413,6 +1464,7 @@ def _update_protomer_geometry_from_xyz(
             )
             if protomer.mol is not None:
                 protomer.mol.SetProp("connectivity_mismatch", "true")
+                _set_mol_prop_bool(protomer.mol, "geometry_fallback", True)
                 protomer.mol.SetProp(
                     "connectivity_mismatch_error",
                     (
@@ -1944,6 +1996,9 @@ def _run_single_conformer_workflow(
             )
             _log_status(log_paths, "WARN", warning_message)
             record_user_warning(warning_message, context="conformer refinement")
+            if protomer.mol is not None:
+                _set_mol_prop_bool(protomer.mol, "connectivity_mismatch", True)
+                _set_mol_prop_bool(protomer.mol, "geometry_fallback", True)
             terms.workflow_status = "connectivity-failed"
             terms.gas_sp_energy_kcal_mol = _format_energy_entry(None, failed_step="connectivity")
             terms.solvation_free_energy_kcal_mol = _format_energy_entry(None, failed_step="connectivity")
@@ -2221,6 +2276,7 @@ def run_protomer_screening(
             log_paths=log_paths,
             progress_callback=_progress,
         )
+        _mark_scf_retry_from_scratch(protomer, scratch_dir)
         terms = workflow_result.terms
         _persist_conformer_ensemble_results(
             protomer,
@@ -2519,6 +2575,8 @@ def run_protomer_solvation(
                 log_paths=log_paths,
                 progress_callback=_conf_progress,
             )
+            _mark_scf_retry_from_scratch(conf_protomer, conf_scratch)
+            _copy_warning_flags_from_conformer(protomer, conf_protomer)
             run_records.append((conf_label, workflow_result.terms))
             if isinstance(workflow_result.terms.solution_phase_free_energy_kcal_mol, (int, float)):
                 pool_entries.append(
@@ -2568,8 +2626,17 @@ def run_protomer_solvation(
             if final_opt_xyz is not None and final_opt_xyz.is_file():
                 opt_mol = _mol_from_xyz_with_connectivity(final_opt_xyz)
                 if opt_mol is not None:
+                    previous_mol = protomer.mol
                     protomer.mol = opt_mol
                     protomer.mol.SetProp("connectivity_mismatch", "false")
+                    if previous_mol is not None:
+                        for key in (
+                            "scf_convergence_retry",
+                            "geometry_reoptimization_retry",
+                            "geometry_fallback",
+                        ):
+                            if _optional_bool_prop(previous_mol, key):
+                                _set_mol_prop_bool(protomer.mol, key, True)
 
         _persist_conformer_ensemble_results(
             protomer,
