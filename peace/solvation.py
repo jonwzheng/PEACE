@@ -720,9 +720,7 @@ def _run_optimization_with_convergence_retry(
                     status="WARN",
                     message=(
                         f"{engine} optimization still has connectivity mismatch after "
-                        f"relaxed retry at convergence={level} (initial={opt_level}); "
-                        "the optimized geometry is potentially unsafe and the caller will "
-                        "discard it or fall back to a safer geometry"
+                        f"relaxed retry at convergence={level} (initial={opt_level}) "
                     ),
                     user_warning=True,
                     progress_callback=progress_callback,
