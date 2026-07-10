@@ -434,7 +434,6 @@ class Tautomer:
         Returns:
             True if the protomer was added, False if it was not.
         """
-        #TODO: check if generated protomers have same # of heavy atoms to base
         canonical_smiles = canon_smiles(protomer.smiles)
         if canonical_smiles is None:
             return False
@@ -531,7 +530,6 @@ class Species:
         return cls(Tautomer.from_mol(mol))
 
     def embed_tautomer(self, taut: Tautomer):
-        # TODO: check that the number of atoms is same as the reference tautomer
         idx = list(self.tautomers.keys())[-1] + 1
         self.tautomers[idx] = taut
 
