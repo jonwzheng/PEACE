@@ -41,7 +41,6 @@ def run_gxtb_optimization(
     xtb_executable: str,
     opt_level: str,
     charge: int,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
@@ -73,7 +72,7 @@ def run_gxtb_optimization(
         f"--gxtb{input_flag} --opt {shlex.quote(opt_level)} --grad --chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running g-xTB optimization: {cmd_opt}")
-    cp_opt = run_command(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    cp_opt = run_command(cmd_opt, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         gxtbopt_log_path = scratch_dir / "gxtbopt_run.log"
         gxtbopt_log_path.write_text(cp_opt.stdout)
@@ -116,7 +115,6 @@ def run_gxtb_single_point_energy(
     xyz_path: Path,
     xtb_executable: str,
     charge: int,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
@@ -130,7 +128,7 @@ def run_gxtb_single_point_energy(
         str(charge),
     ]
     log_status(log_paths, "STEP", f"running g-xTB gas-phase SP: {' '.join(shlex.quote(x) for x in cmd_sp)}")
-    cp_sp = run_command(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    cp_sp = run_command(cmd_sp, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         gxtbsp_log_path = scratch_dir / "gxtbsp_run.log"
         gxtbsp_log_path.write_text(cp_sp.stdout)

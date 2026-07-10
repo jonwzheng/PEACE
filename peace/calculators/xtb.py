@@ -93,7 +93,6 @@ def run_xtb_command(
     cmd: str | list[str],
     *,
     cwd: Path,
-    timeout_s: Optional[int] = None,
     dry_run: bool = False,
     run_fn: Callable[..., subprocess.CompletedProcess[str]],
     etemp_retry_k: float = XTB_SCF_ETEMP_RETRY_K,
@@ -105,7 +104,7 @@ def run_xtb_command(
     if dry_run:
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    completed = run_fn(cmd, cwd=cwd, timeout_s=timeout_s, dry_run=False)
+    completed = run_fn(cmd, cwd=cwd, dry_run=False)
     log_text = collect_xtb_log_text(cwd, completed)
     if not has_xtb_fatal_error(log_text):
         return completed
@@ -117,7 +116,7 @@ def run_xtb_command(
             f"retrying with --etemp {etemp_retry_k}",
             file=sys.stderr,
         )
-        retry_completed = run_fn(retry_cmd, cwd=cwd, timeout_s=timeout_s, dry_run=False)
+        retry_completed = run_fn(retry_cmd, cwd=cwd, dry_run=False)
         retry_log_text = collect_xtb_log_text(cwd, retry_completed)
         if not has_xtb_fatal_error(retry_log_text):
             return retry_completed
@@ -180,7 +179,6 @@ def run_xtb_optimization(
     opt_level: str,
     charge: int,
     solvent: str,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
@@ -213,7 +211,7 @@ def run_xtb_optimization(
         f"--chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
-    cp_opt = run_command(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    cp_opt = run_command(cmd_opt, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         optimization_log_path = scratch_dir / "xtbopt_run.log"
         optimization_log_path.write_text(cp_opt.stdout)
@@ -321,7 +319,6 @@ def run_cpcmx_single_point(
     solvent: str,
     charge: int,
     gfn: int,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
@@ -339,7 +336,7 @@ def run_cpcmx_single_point(
         str(gfn),
     ]
     log_status(log_paths, "STEP", f"running CPCM-X SP: {' '.join(shlex.quote(x) for x in cmd_sp)}")
-    cp_sp = run_command(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    cp_sp = run_command(cmd_sp, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         solvation_log_path = scratch_dir / "xtbsolv_run.log"
         solvation_log_path.write_text(cp_sp.stdout)
@@ -375,7 +372,6 @@ def run_gxtb_single_point_energy(
     xyz_path: Path,
     xtb_executable: str,
     charge: int,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
@@ -387,7 +383,7 @@ def run_gxtb_single_point_energy(
         f"--chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running g-xTB gas-phase SP via driver: {cmd_sp}")
-    cp_sp = run_command(cmd_sp, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    cp_sp = run_command(cmd_sp, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         gxtbsp_log_path = scratch_dir / "gxtbsp_run.log"
         gxtbsp_log_path.write_text(cp_sp.stdout)
@@ -426,7 +422,6 @@ def run_gxtb_optimization(
     xtb_executable: str,
     opt_level: str,
     charge: int,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
@@ -462,7 +457,7 @@ def run_gxtb_optimization(
         f"--chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running g-xTB optimization via driver: {cmd_opt}")
-    cp_opt = run_command(cmd_opt, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    cp_opt = run_command(cmd_opt, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         gxtbopt_log_path = scratch_dir / "gxtbopt_run.log"
         gxtbopt_log_path.write_text(cp_opt.stdout)
@@ -506,7 +501,6 @@ def run_hessian_and_parse_energies(
     xtb_executable: str,
     charge: int,
     gfn: int,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
@@ -522,7 +516,7 @@ def run_hessian_and_parse_energies(
         str(gfn),
     ]
     log_status(log_paths, "STEP", f"running hessian: {' '.join(shlex.quote(x) for x in cmd_hess)}")
-    cp_hess = run_command(cmd_hess, cwd=scratch_dir, timeout_s=timeout_s, dry_run=dry_run)
+    cp_hess = run_command(cmd_hess, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         frequency_log_path = scratch_dir / "xtbfreq_run.log"
         frequency_log_path.write_text(cp_hess.stdout)

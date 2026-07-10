@@ -14,7 +14,9 @@ from typing import Callable, Literal, Optional, Union
 import numpy as np
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdDetermineBonds, rdMolTransforms
+from rdkit.Chem import AllChem, rdDetermineBonds
+
+from prism_pruner.pruner import prune
 
 from .calculators import (
     XtbFatalError,
@@ -44,9 +46,6 @@ REFINEMENT_MIN_EMBED_CONFORMERS = 20
 REFINEMENT_MAX_QM_CONFORMERS = 20
 REFINEMENT_MAX_EMBED_CONFORMERS = 500
 DEFAULT_CONFORMER_ENERGY_THRESHOLD_KCAL_MOL = 10.0
-CONFORMER_DIHEDRAL_MAX_DEV_DEG = 10.0
-CONFORMER_DIHEDRAL_RMS_DEV_DEG = 20.0
-CONFORMER_ALL_ATOM_RMSD_ANG = 0.20
 
 EnergyListValue = Union[float, str]
 
@@ -130,108 +129,87 @@ def _boltzmann_aggregate_energy(
     return min_energy - rt * log_sum
 
 
-def _wrap_dihedral_delta_deg(delta: float) -> float:
-    wrapped = (float(delta) + 180.0) % 360.0 - 180.0
-    return abs(wrapped)
+def _prism_atoms_from_mol_h(mol_h: Chem.Mol) -> np.ndarray:
+    return np.asarray([atom.GetSymbol() for atom in mol_h.GetAtoms()], dtype=str)
 
 
-def _iter_rotatable_dihedral_quads(mol_h: Chem.Mol) -> list[tuple[int, int, int, int]]:
-    quads: list[tuple[int, int, int, int]] = []
-    for bond in mol_h.GetBonds():
-        begin = bond.GetBeginAtom()
-        end = bond.GetEndAtom()
-        if begin.GetDegree() < 2 or end.GetDegree() < 2:
-            continue
-        begin_neighbors = [n.GetIdx() for n in begin.GetNeighbors() if n.GetIdx() != end.GetIdx()]
-        end_neighbors = [n.GetIdx() for n in end.GetNeighbors() if n.GetIdx() != begin.GetIdx()]
-        if not begin_neighbors or not end_neighbors:
-            continue
-        quads.append((begin_neighbors[0], begin.GetIdx(), end.GetIdx(), end_neighbors[0]))
-    return quads
-
-
-def _rotatable_dihedral_signature(mol_h: Chem.Mol, conf_id: int) -> list[float]:
+def _prism_coords_from_conf(mol_h: Chem.Mol, conf_id: int) -> np.ndarray:
     conf = mol_h.GetConformer(int(conf_id))
-    return [
-        float(rdMolTransforms.GetDihedralDeg(conf, a, b, c, d))
-        for a, b, c, d in _iter_rotatable_dihedral_quads(mol_h)
-    ]
+    return np.asarray(
+        [list(conf.GetAtomPosition(i)) for i in range(mol_h.GetNumAtoms())],
+        dtype=float,
+    )
 
 
-def _read_xyz_atom_coords(path: Path) -> np.ndarray:
-    lines = path.read_text().strip().splitlines()
+def _prism_atoms_and_coords_from_xyz(xyz_path: Path) -> tuple[np.ndarray, np.ndarray]:
+    lines = xyz_path.read_text().strip().splitlines()
     n_atoms = int(lines[0].strip())
+    atoms: list[str] = []
     coords: list[list[float]] = []
     for line in lines[2 : 2 + n_atoms]:
         parts = line.split()
+        atoms.append(parts[0])
         coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
-    return np.asarray(coords, dtype=float)
+    return np.asarray(atoms, dtype=str), np.asarray(coords, dtype=float)
 
 
-def _kabsch_rmsd(
-    coords_a: np.ndarray,
-    coords_b: np.ndarray,
-) -> float:
-    if coords_a.shape != coords_b.shape or len(coords_a) == 0:
-        warnings.warn("Kabsch RMSD calculation failed: incompatible shapes or empty arrays")
-        return float("inf")
-    a_centered = coords_a - coords_a.mean(axis=0)
-    b_centered = coords_b - coords_b.mean(axis=0)
-    covariance = b_centered.T @ a_centered
-    left, _, right_t = np.linalg.svd(covariance)
-    rotation = left @ right_t
-    if np.linalg.det(rotation) < 0.0:
-        left[:, -1] *= -1.0
-        rotation = left @ right_t
-    b_aligned = b_centered @ rotation
-    diff = a_centered - b_aligned
-    return float(np.sqrt(np.mean(np.sum(diff * diff, axis=1))))
-
-
-def _all_atom_aligned_best_rmsd(mol_a: Chem.Mol, mol_b: Chem.Mol) -> float:
-    return float(AllChem.GetBestRMS(Chem.Mol(mol_a), Chem.Mol(mol_b)))
-
-
-def _all_atom_rmsd(mol_h: Chem.Mol, conf_id_a: int, conf_id_b: int) -> float:
-    mol_a = Chem.Mol(mol_h)
-    mol_b = Chem.Mol(mol_h)
-    mol_a.RemoveAllConformers()
-    mol_b.RemoveAllConformers()
-    mol_a.AddConformer(mol_h.GetConformer(int(conf_id_a)), assignId=True)
-    mol_b.AddConformer(mol_h.GetConformer(int(conf_id_b)), assignId=True)
-    return _all_atom_aligned_best_rmsd(mol_a, mol_b)
-
-
-def _conformers_are_redundant(
-    mol_h: Chem.Mol,
-    conf_id_a: int,
-    conf_id_b: int,
+def _prism_prune_structure_mask(
+    structures: np.ndarray,
+    atoms: np.ndarray,
     *,
-    dihedral_max_dev_deg: float = CONFORMER_DIHEDRAL_MAX_DEV_DEG,
-    dihedral_rms_dev_deg: float = CONFORMER_DIHEDRAL_RMS_DEV_DEG,
-    all_atom_rmsd_ang: float = CONFORMER_ALL_ATOM_RMSD_ANG,
-) -> bool:
-    dihedrals_a = _rotatable_dihedral_signature(mol_h, conf_id_a)
-    dihedrals_b = _rotatable_dihedral_signature(mol_h, conf_id_b)
-    if dihedrals_a and len(dihedrals_a) == len(dihedrals_b):
-        diffs = [_wrap_dihedral_delta_deg(a - b) for a, b in zip(dihedrals_a, dihedrals_b)]
-        max_dev = max(diffs)
-        dihedral_rms = math.sqrt(sum(diff * diff for diff in diffs) / len(diffs))
-        if max_dev < dihedral_max_dev_deg and dihedral_rms < dihedral_rms_dev_deg:
-            return True
-    try:
-        return _all_atom_rmsd(mol_h, conf_id_a, conf_id_b) < all_atom_rmsd_ang
-    except Exception:
-        return False
+    energies: Optional[np.ndarray] = None,
+    max_dE: float = float("inf"),
+    log_paths: Optional[list[Path]] = None,
+) -> np.ndarray:
+    if len(structures) <= 1:
+        return np.ones(len(structures), dtype=bool)
+
+    _, mask = prune(
+        structures,
+        atoms,
+        moi_pruning=True,
+        rmsd_pruning=True,
+        rot_corr_rmsd_pruning=True,
+        energies=energies,
+        max_dE=max_dE,
+        debugfunction=(
+            (lambda msg: _log_status(log_paths, "DEBUG", msg)) if log_paths is not None else None
+        ),
+        logfunction=None,
+    )
+    return mask
 
 
-def _all_atom_rmsd_from_xyz(path_a: Path, path_b: Path) -> float:
-    try:
-        coords_a = _read_xyz_atom_coords(path_a)
-        coords_b = _read_xyz_atom_coords(path_b)
-        return _kabsch_rmsd(coords_a, coords_b)
-    except Exception:
-        return float("inf")
+def _prune_redundant_conf_ids(
+    mol_h: Chem.Mol,
+    ranked_conf_ids: list[int],
+    *,
+    log_paths: Optional[list[Path]] = None,
+) -> list[int]:
+    conf_ids = [int(conf_id) for conf_id in ranked_conf_ids]
+    if len(conf_ids) <= 1:
+        return conf_ids
+
+    atoms = _prism_atoms_from_mol_h(mol_h)
+    structures = np.stack([_prism_coords_from_conf(mol_h, conf_id) for conf_id in conf_ids])
+    energies = np.asarray(
+        [_mmff94_conformer_energy_kcal_mol(mol_h, conf_id) or float("inf") for conf_id in conf_ids],
+        dtype=float,
+    )
+    mask = _prism_prune_structure_mask(
+        structures,
+        atoms,
+        energies=energies,
+        log_paths=log_paths,
+    )
+    pruned = [conf_id for conf_id, keep in zip(conf_ids, mask) if keep]
+    if log_paths is not None and len(pruned) < len(conf_ids):
+        _log_status(
+            log_paths,
+            "OK",
+            f"prism-pruner removed {len(conf_ids) - len(pruned)} redundant embedded conformer(s)",
+        )
+    return pruned
 
 
 @dataclass
@@ -394,55 +372,12 @@ def _xyz_connectivity_matches_reference(xyz_path: Path, reference_mol: Chem.Mol)
     return _connectivity_matches_reference(mol, reference_mol)
 
 
-def _dihedrals_from_xyz(xyz_path: Path) -> Optional[list[float]]:
-    mol = _mol_from_xyz_with_connectivity(xyz_path)
-    if mol is None:
-        return None
-    try:
-        mol_h = Chem.AddHs(mol)
-        return _rotatable_dihedral_signature(mol_h, 0)
-    except Exception:
-        return None
-
-
-def _dihedral_signatures_match(dih_a: list[float], dih_b: list[float]) -> bool:
-    if not dih_a or len(dih_a) != len(dih_b):
-        return False
-    diffs = [_wrap_dihedral_delta_deg(a - b) for a, b in zip(dih_a, dih_b)]
-    max_dev = max(diffs)
-    dihedral_rms = math.sqrt(sum(diff * diff for diff in diffs) / len(diffs))
-    return max_dev < CONFORMER_DIHEDRAL_MAX_DEV_DEG and dihedral_rms < CONFORMER_DIHEDRAL_RMS_DEV_DEG
-
-
-def _optimized_xyz_are_redundant(path_a: Path, path_b: Path) -> bool:
-    dih_a = _dihedrals_from_xyz(path_a)
-    dih_b = _dihedrals_from_xyz(path_b)
-    if dih_a is not None and dih_b is not None and _dihedral_signatures_match(dih_a, dih_b):
-        return True
-    try:
-        return _all_atom_rmsd_from_xyz(path_a, path_b) < CONFORMER_ALL_ATOM_RMSD_ANG
-    except Exception:
-        return False
-
-
-def _prune_redundant_conf_ids(mol_h: Chem.Mol, ranked_conf_ids: list[int]) -> list[int]:
-    kept: list[int] = []
-    for conf_id in ranked_conf_ids:
-        conf_id = int(conf_id)
-        if any(
-            _conformers_are_redundant(mol_h, conf_id, kept_id)
-            for kept_id in kept
-        ):
-            continue
-        kept.append(conf_id)
-    return kept
-
-
 def _prune_redundant_pool_entries(
     entries: list[ConformerPoolEntry],
     *,
     reference_mol: Chem.Mol,
     max_conformers: Optional[int] = None,
+    log_paths: Optional[list[Path]] = None,
 ) -> list[ConformerPoolEntry]:
     valid: list[ConformerPoolEntry] = []
     for entry in entries:
@@ -457,20 +392,56 @@ def _prune_redundant_pool_entries(
 
     valid.sort(key=lambda entry: float(entry.terms.solution_phase_free_energy_kcal_mol))
 
-    kept: list[ConformerPoolEntry] = []
-    for entry in valid:
-        if entry.opt_xyz_path is None:
-            kept.append(entry)
-            continue
-        if any(
-            other.opt_xyz_path is not None
-            and _optimized_xyz_are_redundant(entry.opt_xyz_path, other.opt_xyz_path)
-            for other in kept
-        ):
-            continue
-        kept.append(entry)
-        if max_conformers is not None and len(kept) >= max_conformers:
-            break
+    entries_without_xyz = [entry for entry in valid if entry.opt_xyz_path is None]
+    entries_with_xyz = [entry for entry in valid if entry.opt_xyz_path is not None]
+
+    pruned_with_xyz: list[ConformerPoolEntry] = []
+    if entries_with_xyz:
+        atoms: Optional[np.ndarray] = None
+        structures: list[np.ndarray] = []
+        energies: list[float] = []
+        kept_indices: list[int] = []
+        for idx, entry in enumerate(entries_with_xyz):
+            entry_atoms, coords = _prism_atoms_and_coords_from_xyz(entry.opt_xyz_path)
+            if atoms is None:
+                atoms = entry_atoms
+            elif not np.array_equal(atoms, entry_atoms):
+                continue
+            structures.append(coords)
+            energies.append(float(entry.terms.solution_phase_free_energy_kcal_mol))
+            kept_indices.append(idx)
+
+        if atoms is not None and structures:
+            structures_arr = np.stack(structures)
+            energies_arr = np.asarray(energies, dtype=float)
+            mask = _prism_prune_structure_mask(
+                structures_arr,
+                atoms,
+                energies=energies_arr,
+                log_paths=log_paths,
+            )
+            pruned_with_xyz = [
+                entries_with_xyz[kept_indices[i]]
+                for i, keep in enumerate(mask)
+                if keep
+            ]
+            if log_paths is not None and len(pruned_with_xyz) < len(entries_with_xyz):
+                _log_status(
+                    log_paths,
+                    "OK",
+                    (
+                        "prism-pruner removed "
+                        f"{len(entries_with_xyz) - len(pruned_with_xyz)} redundant "
+                        "CPCM-optimized conformer(s)"
+                    ),
+                )
+
+    kept = sorted(
+        entries_without_xyz + pruned_with_xyz,
+        key=lambda entry: float(entry.terms.solution_phase_free_energy_kcal_mol),
+    )
+    if max_conformers is not None:
+        kept = kept[: int(max_conformers)]
     return kept
 
 
@@ -517,7 +488,7 @@ def _generate_kdg_conformer_ensemble(
     Otherwise the count follows the rotatable-bond heuristic
     (``max(min_conformers, min(3**n_rotatable_bonds, max_embed_conformers))``).
 
-    MMFF94 relaxation is applied later to the quick-pruned candidate pool, before
+    MMFF94 relaxation is applied later to the pruned candidate pool, before
     applying the final max_qm_conformers limit.
     """
     mol_h = Chem.AddHs(Chem.Mol(mol))
@@ -811,7 +782,6 @@ def _run_xtb_optimization_with_retry(
     opt_level: str,
     charge: int,
     alpb_solvent: str,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     progress_callback: Optional[Callable[[str], None]] = None,
@@ -831,7 +801,6 @@ def _run_xtb_optimization_with_retry(
             opt_level=level,
             charge=charge,
             solvent=alpb_solvent,
-            timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
             run_command=_run_xtb,
@@ -855,7 +824,6 @@ def _run_gxtb_single_point_on_xyz(
     xtb_version: XtbVersion,
     charge: int,
     dry_run: bool,
-    timeout_s: Optional[int],
     log_paths: list[Path],
 ) -> Optional[float]:
     run_gxtb_sp = _resolve_gxtb_single_point_runner(xtb_version)
@@ -864,7 +832,6 @@ def _run_gxtb_single_point_on_xyz(
         xyz_path=xyz_path,
         xtb_executable=xtb_executable,
         charge=charge,
-        timeout_s=timeout_s,
         dry_run=dry_run,
         log_paths=log_paths,
         run_command=_run_xtb,
@@ -884,7 +851,6 @@ def _try_gxtb_gas_phase_refinement(
     opt_level: str,
     charge: int,
     dry_run: bool,
-    timeout_s: Optional[int],
     log_paths: list[Path],
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> GxtbRefinementResult:
@@ -915,7 +881,6 @@ def _try_gxtb_gas_phase_refinement(
                 xtb_version=xtb_version,
                 charge=charge,
                 dry_run=dry_run,
-                timeout_s=timeout_s,
                 log_paths=log_paths,
             )
         except XtbFatalError as exc:
@@ -936,7 +901,6 @@ def _try_gxtb_gas_phase_refinement(
             xtb_version=xtb_version,
             opt_level=opt_level,
             charge=charge,
-            timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
             progress_callback=progress_callback,
@@ -973,7 +937,6 @@ def _try_gxtb_gas_phase_refinement(
             xtb_version=xtb_version,
             charge=charge,
             dry_run=dry_run,
-            timeout_s=timeout_s,
             log_paths=log_paths,
         )
     except XtbFatalError:
@@ -1005,7 +968,6 @@ def _try_hessian_with_fallback(
     charge: int,
     gfn: int,
     dry_run: bool,
-    timeout_s: Optional[int],
     log_paths: list[Path],
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
     if primary_xyz_path is not None:
@@ -1018,7 +980,6 @@ def _try_hessian_with_fallback(
                 xtb_executable=xtb_executable,
                 charge=charge,
                 gfn=gfn,
-                timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
                 run_command=_run_xtb,
@@ -1050,7 +1011,6 @@ def _try_hessian_with_fallback(
         xtb_executable=xtb_executable,
         charge=charge,
         gfn=gfn,
-        timeout_s=timeout_s,
         dry_run=dry_run,
         log_paths=log_paths,
         run_command=_run_xtb,
@@ -1068,7 +1028,6 @@ def _run_gxtb_optimization_with_retry(
     xtb_version: XtbVersion,
     opt_level: str,
     charge: int,
-    timeout_s: Optional[int],
     dry_run: bool,
     log_paths: list[Path],
     progress_callback: Optional[Callable[[str], None]] = None,
@@ -1083,7 +1042,6 @@ def _run_gxtb_optimization_with_retry(
             xtb_executable=xtb_executable,
             opt_level=level,
             charge=charge,
-            timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
             run_command=_run_xtb,
@@ -1117,7 +1075,6 @@ def _run(
     cmd: str | list[str],
     *,
     cwd: Path,
-    timeout_s: Optional[int] = None,
     dry_run: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """
@@ -1132,7 +1089,6 @@ def _run(
         shell=isinstance(cmd, str),
         capture_output=True,
         text=True,
-        timeout=timeout_s,
         check=False,
     )
 
@@ -1141,14 +1097,12 @@ def _run_xtb(
     cmd: str | list[str],
     *,
     cwd: Path,
-    timeout_s: Optional[int] = None,
     dry_run: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run an xTB command with log inspection and SCF etemp retry."""
     return run_xtb_command(
         cmd,
         cwd=cwd,
-        timeout_s=timeout_s,
         dry_run=dry_run,
         run_fn=_run,
     )
@@ -1781,7 +1735,6 @@ def _run_screening_conformer_workflow(
     solvent: SolventNames,
     gfn: int,
     dry_run: bool,
-    timeout_s: Optional[int],
     log_paths: list[Path],
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> ConformerWorkflowResult:
@@ -1824,7 +1777,6 @@ def _run_screening_conformer_workflow(
             solvent=solvent.cpcm,
             charge=charge,
             gfn=gfn,
-            timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
             run_command=_run_xtb,
@@ -1849,7 +1801,6 @@ def _run_screening_conformer_workflow(
                 xyz_path=gxtb_xyz_path,
                 xtb_executable=xtb_executable,
                 charge=charge,
-                timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
                 run_command=_run_xtb,
@@ -1871,7 +1822,6 @@ def _run_screening_conformer_workflow(
                 charge=charge,
                 gfn=gfn,
                 dry_run=dry_run,
-                timeout_s=timeout_s,
                 log_paths=log_paths,
             )
         except XtbFatalError as exc:
@@ -1952,7 +1902,6 @@ def _run_single_conformer_workflow(
     optimization_engine: Literal["xtb", "aimnet2"],
     gxtb_optimize: bool = False,
     dry_run: bool,
-    timeout_s: Optional[int],
     log_paths: list[Path],
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> ConformerWorkflowResult:
@@ -1993,7 +1942,6 @@ def _run_single_conformer_workflow(
                 opt_level=opt_level,
                 charge=charge,
                 alpb_solvent=solvent.alpb,
-                timeout_s=timeout_s,
                 dry_run=dry_run,
                 log_paths=log_paths,
                 progress_callback=progress_callback,
@@ -2052,7 +2000,6 @@ def _run_single_conformer_workflow(
             solvent=solvent.cpcm,
             charge=charge,
             gfn=gfn,
-            timeout_s=timeout_s,
             dry_run=dry_run,
             log_paths=log_paths,
             run_command=_run_xtb,
@@ -2080,7 +2027,6 @@ def _run_single_conformer_workflow(
                     opt_level=opt_level,
                     charge=charge,
                     dry_run=dry_run,
-                    timeout_s=timeout_s,
                     log_paths=log_paths,
                     progress_callback=progress_callback,
                 )
@@ -2109,7 +2055,6 @@ def _run_single_conformer_workflow(
                     xtb_version=xtb_version,
                     charge=charge,
                     dry_run=dry_run,
-                    timeout_s=timeout_s,
                     log_paths=log_paths,
                 )
 
@@ -2135,7 +2080,6 @@ def _run_single_conformer_workflow(
                 charge=charge,
                 gfn=gfn,
                 dry_run=dry_run,
-                timeout_s=timeout_s,
                 log_paths=log_paths,
             )
         except XtbFatalError as exc:
@@ -2218,7 +2162,6 @@ def run_protomer_screening(
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
     dry_run: bool = False,
-    timeout_s: Optional[int] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> ScreeningWorkflowResult:
     """
@@ -2295,7 +2238,6 @@ def run_protomer_screening(
             solvent=solvent,
             gfn=gfn,
             dry_run=dry_run,
-            timeout_s=timeout_s,
             log_paths=log_paths,
             progress_callback=_progress,
         )
@@ -2427,7 +2369,6 @@ def run_protomer_solvation(
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
     dry_run: bool = False,
-    timeout_s: Optional[int] = None,
     random_seed: int = 42,
     max_qm_conformers: int = REFINEMENT_MAX_QM_CONFORMERS,
     embedded_conformers: Optional[int] = None,
@@ -2528,7 +2469,11 @@ def run_protomer_solvation(
             graph_mol,
             energy_threshold_kcal_mol=conformer_energy_threshold_kcal_mol,
         )
-        candidate_pool_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
+        candidate_pool_conf_ids = _prune_redundant_conf_ids(
+            mol_h,
+            filtered_conf_ids,
+            log_paths=log_paths,
+        )
         _log_status(
             log_paths,
             "OK",
@@ -2546,7 +2491,11 @@ def run_protomer_solvation(
             key=lambda cid: _mmff94_conformer_energy_kcal_mol(mol_h, cid) or float("inf"),
         )
         n_before_mmff94_prune = len(ranked_relaxed_conf_ids)
-        deduplicated_relaxed_conf_ids = _prune_redundant_conf_ids(mol_h, ranked_relaxed_conf_ids)
+        deduplicated_relaxed_conf_ids = _prune_redundant_conf_ids(
+            mol_h,
+            ranked_relaxed_conf_ids,
+            log_paths=log_paths,
+        )
         selected_conf_ids = deduplicated_relaxed_conf_ids[: int(max_qm_conformers)]
         _log_status(
             log_paths,
@@ -2589,7 +2538,6 @@ def run_protomer_solvation(
                 optimization_engine=optimization_engine,
                 gxtb_optimize=gxtb_optimize,
                 dry_run=dry_run,
-                timeout_s=timeout_s,
                 log_paths=log_paths,
                 progress_callback=_conf_progress,
             )
@@ -2607,6 +2555,7 @@ def run_protomer_solvation(
         pruned_pool = _prune_redundant_pool_entries(
             pool_entries,
             reference_mol=graph_mol,
+            log_paths=log_paths,
         )
         if not pruned_pool and pool_entries:
             lowest_entry = min(
