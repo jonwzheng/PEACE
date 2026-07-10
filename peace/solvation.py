@@ -548,30 +548,6 @@ def _filter_ranked_embedded_conformers(
     return filtered
 
 
-def _select_lowest_embedded_conformers(
-    mol_h: Chem.Mol,
-    ranked_conf_ids: list[int],
-    reference_mol: Chem.Mol,
-    *,
-    max_conformers: int,
-    energy_threshold_kcal_mol: Optional[float] = DEFAULT_CONFORMER_ENERGY_THRESHOLD_KCAL_MOL,
-) -> list[int]:
-    filtered_conf_ids = _filter_ranked_embedded_conformers(
-        mol_h,
-        ranked_conf_ids,
-        reference_mol,
-        energy_threshold_kcal_mol=energy_threshold_kcal_mol,
-    )
-    candidate_pool_conf_ids = _prune_redundant_conf_ids(mol_h, filtered_conf_ids)
-    _optimize_mmff94_conformers(mol_h, candidate_pool_conf_ids)
-    ranked_relaxed_conf_ids = sorted(
-        candidate_pool_conf_ids,
-        key=lambda cid: _mmff94_conformer_energy_kcal_mol(mol_h, cid) or float("inf"),
-    )
-    deduplicated_relaxed_conf_ids = _prune_redundant_conf_ids(mol_h, ranked_relaxed_conf_ids)
-    return deduplicated_relaxed_conf_ids[: int(max_conformers)]
-
-
 def _mol_from_conf_id(mol_h: Chem.Mol, conf_id: int, *, remove_hydrogens: bool = True) -> Chem.Mol:
     mol_one = Chem.Mol(mol_h)
     mol_one.RemoveAllConformers()

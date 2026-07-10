@@ -14,6 +14,8 @@ from rdkit import Chem
 from .common import HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
 
 XTB_ERROR_MARKER = "[ERROR]"
+XTB_INPUT_WARNING_MARKER = "[WARNING] Please study the warnings concerning your input carefully"
+GXTB_STABLE_RELEASE_URL = "https://github.com/grimme-lab/g-xtb/releases/tag/v2.0.1"
 XTB_SCF_ETEMP_RETRY_K = 1000.0
 XTB_NATIVE_LOG_NAMES = ("xtb.log", "xtbout", "xtbopt.log", "xtb.out")
 
@@ -90,6 +92,47 @@ def has_xtb_fatal_error(text: str) -> bool:
     return XTB_ERROR_MARKER in text
 
 
+def has_xtb_input_warning(text: str) -> bool:
+    return XTB_INPUT_WARNING_MARKER in text
+
+
+def _suggests_gxtb_version_mismatch(text: str) -> bool:
+    lower = text.lower()
+    return "unknown option" in lower and "gxtb" in lower
+
+
+def _format_xtb_input_warning_message(
+    *,
+    cmd: str | list[str],
+    log_text: str,
+) -> str:
+    cmd_text = cmd if isinstance(cmd, str) else " ".join(shlex.quote(x) for x in cmd)
+    advice_lines = [
+        "xTB reported input/configuration warnings that make this run unreliable.",
+        f"xTB command: {cmd_text}",
+    ]
+    if _suggests_gxtb_version_mismatch(log_text):
+        advice_lines.append(
+            "Detected 'Unknown option' together with 'gxtb' in the xTB log. "
+            "It is possible your binary may not support the selected g-xTB CLI dialect; "
+            "try changing --xtb-version. Otherwise, please review the xTB command provided."
+        )
+    advice_lines.append(
+        "Also consider using g-xTB 2.0.1 built on xTB binary 6.7.1. "
+        f"A stable release is available at {GXTB_STABLE_RELEASE_URL}"
+    )
+    return "\n".join(advice_lines)
+
+
+def _raise_if_xtb_input_warning(
+    *,
+    cmd: str | list[str],
+    log_text: str,
+) -> None:
+    if has_xtb_input_warning(log_text):
+        raise XtbFatalError(_format_xtb_input_warning_message(cmd=cmd, log_text=log_text))
+
+
 def is_xtb_scf_convergence_error(text: str) -> bool:
     if not has_xtb_fatal_error(text):
         return False
@@ -150,6 +193,7 @@ def run_xtb_command(
 
     completed = run_fn(cmd, cwd=cwd, dry_run=False)
     log_text = collect_xtb_log_text(cwd, completed)
+    _raise_if_xtb_input_warning(cmd=cmd, log_text=log_text)
     if not has_xtb_fatal_error(log_text):
         return completed
 
@@ -162,6 +206,7 @@ def run_xtb_command(
         )
         retry_completed = run_fn(retry_cmd, cwd=cwd, dry_run=False)
         retry_log_text = collect_xtb_log_text(cwd, retry_completed)
+        _raise_if_xtb_input_warning(cmd=retry_cmd, log_text=retry_log_text)
         if not has_xtb_fatal_error(retry_log_text):
             return retry_completed
         raise XtbFatalError(

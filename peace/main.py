@@ -753,7 +753,7 @@ if __name__ == "__main__":
     if args.plot_from_csv and args.no_plot:
         parser.error("--plot-from-csv cannot be combined with --no-plot")
 
-    from peace.solvents import SolventNames, resolve_solvent
+    from peace.solvents import resolve_solvent
 
     try:
         solvent = resolve_solvent(args.solvent)
