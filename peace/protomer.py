@@ -18,6 +18,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from .logging_utils import LogLevel, log
+
 
 def _increment_degeneracy(protomer: "Protomer") -> int:
     """Increment and return the degeneracy count on a protomer mol."""
@@ -93,6 +95,10 @@ def _connectivity_graphs_are_isomorphic(left: Mol | None, right: Mol | None) -> 
     return left.HasSubstructMatch(right, useChirality=False) and right.HasSubstructMatch(
         left, useChirality=False
     )
+
+
+def _log_duplicate_skip(message: str) -> None:
+    log(message, level=LogLevel.VERBOSE)
 
 
 def _record_duplicate_skip(
@@ -195,7 +201,7 @@ class SpeciesProtomerRegistry:
                         skipped_tautomer_id=taut_idx,
                         canonical_tautomer_id=canon_taut_idx,
                     )
-                    warnings.warn(
+                    _log_duplicate_skip(
                         f"Skipping duplicate protomer {protomer.smiles} under tautomer {taut_idx}; "
                         f"canonical entry is tautomer {canon_taut_idx} protomer {canon_prot_idx} "
                         f"(degeneracy={degeneracy})."
@@ -214,7 +220,7 @@ class SpeciesProtomerRegistry:
                         skipped_protomer_id=prot_idx,
                         canonical_tautomer_id=canon_taut_idx,
                     )
-                    warnings.warn(
+                    _log_duplicate_skip(
                         f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
                         f"under tautomer {taut_idx}; canonical entry is tautomer "
                         f"{canon_taut_idx} protomer {canon_prot_idx} "
@@ -451,12 +457,12 @@ class Tautomer:
                 )
                 species_registry.skipped_count += 1
                 if skipped_tautomer_id == canon_taut_idx:
-                    warnings.warn(
+                    _log_duplicate_skip(
                         f"Skipping duplicate protomer {protomer.smiles} within tautomer "
                         f"{skipped_tautomer_id} (degeneracy={degeneracy})."
                     )
                 else:
-                    warnings.warn(
+                    _log_duplicate_skip(
                         f"Skipping duplicate protomer {protomer.smiles} under tautomer "
                         f"{skipped_tautomer_id}; canonical entry is tautomer {canon_taut_idx} "
                         f"protomer {canon_prot_idx} (degeneracy={degeneracy})."
@@ -476,12 +482,12 @@ class Tautomer:
                 species_registry.skipped_count += 1
                 species_registry.resonance_skipped_count += 1
                 if skipped_tautomer_id == canon_taut_idx:
-                    warnings.warn(
+                    _log_duplicate_skip(
                         f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
                         f"within tautomer {skipped_tautomer_id} (degeneracy={degeneracy})."
                     )
                 else:
-                    warnings.warn(
+                    _log_duplicate_skip(
                         f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
                         f"under tautomer {skipped_tautomer_id}; canonical entry is "
                         f"tautomer {canon_taut_idx} protomer {canon_prot_idx} "
@@ -496,7 +502,7 @@ class Tautomer:
                 if canon_smiles(existing_protomer.smiles) == canonical_smiles:
                     degeneracy = _increment_degeneracy(existing_protomer)
                     if tautomer_id is not None:
-                        warnings.warn(
+                        _log_duplicate_skip(
                             f"Skipping duplicate protomer {protomer.smiles} within tautomer "
                             f"{tautomer_id} (degeneracy={degeneracy})."
                         )

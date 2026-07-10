@@ -18,6 +18,7 @@ from rdkit.Chem import AllChem, rdDetermineBonds
 
 from prism_pruner.pruner import prune
 
+from .logging_utils import LogLevel, emit_progress
 from .calculators import (
     XtbFatalError,
     report_xtb_fatal_and_exit,
@@ -272,7 +273,7 @@ def _log_conformer_summary(
     _log_status(log_paths, "OK", summary.replace("\n", " | "))
     if progress_callback is not None:
         for line in lines:
-            progress_callback(line)
+            emit_progress(progress_callback, line, level=LogLevel.VERBOSE)
 
 
 def _protomer_has_zwitterionic_xh_sites(mol: Chem.Mol) -> bool:
@@ -650,8 +651,11 @@ def _report_optimization_event(
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     _log_status(log_paths, status, message)
-    if progress_callback is not None:
-        progress_callback(message)
+    emit_progress(
+        progress_callback,
+        message,
+        level=LogLevel.DEFAULT if status in {"WARN", "FAIL"} else LogLevel.VERBOSE,
+    )
 
 
 def _run_optimization_with_convergence_retry(
@@ -683,8 +687,7 @@ def _run_optimization_with_convergence_retry(
                     f"retrying from initial geometry with convergence={next_level}"
                 )
                 _log_status(log_paths, "WARN", f"{summary}: {exc}")
-                if progress_callback is not None:
-                    progress_callback(summary)
+                emit_progress(progress_callback, summary, level=LogLevel.DEFAULT)
                 continue
             raise
 
@@ -836,9 +839,8 @@ def _try_gxtb_gas_phase_refinement(
     If g-xTB optimization fails or the optimized geometry has a connectivity mismatch,
     falls back to a g-xTB single point on the GFN2-xTB/ALPB geometry.
     """
-    def _progress(message: str) -> None:
-        if progress_callback is not None:
-            progress_callback(message)
+    def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
+        emit_progress(progress_callback, message, level=level)
 
     reference_mol = _input_mol_for_connectivity(protomer, mol)
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -1128,9 +1130,8 @@ def run_batch_conformer_generation(
 
     Writes geometries onto each protomer.mol before any xTB/QM workflows run.
     """
-    def _progress(message: str) -> None:
-        if progress_callback is not None:
-            progress_callback(message)
+    def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
+        emit_progress(progress_callback, message, level=level)
 
     scratch_root_path = Path(scratch_root)
     scratch_root_path.mkdir(parents=True, exist_ok=True)
@@ -1720,9 +1721,8 @@ def _run_screening_conformer_workflow(
     Skips GFN2-xTB/ALPB and g-xTB geometry optimizations; runs CPCM-X solvation,
     g-xTB gas-phase single point, and xTB Hessian (RRHO) on the input conformer.
     """
-    def _progress(message: str) -> None:
-        if progress_callback is not None:
-            progress_callback(message)
+    def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
+        emit_progress(progress_callback, message, level=level)
 
     terms = ConformerEnergyTerms(gas_sp_energy_kcal_mol="not-run")
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -1890,9 +1890,8 @@ def _run_single_conformer_workflow(
       ``gxtb_optimize`` is enabled, g-xTB gas-phase re-optimization is run first
       and SP/frequencies use the g-xTB geometry when available.
     """
-    def _progress(message: str) -> None:
-        if progress_callback is not None:
-            progress_callback(message)
+    def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
+        emit_progress(progress_callback, message, level=level)
 
     terms = ConformerEnergyTerms(gas_sp_energy_kcal_mol="not-run")
     scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -2152,9 +2151,8 @@ def run_protomer_screening(
 
     GFN2-xTB/ALPB and g-xTB geometry optimizations are skipped during screening.
     """
-    def _progress(message: str) -> None:
-        if progress_callback is not None:
-            progress_callback(message)
+    def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
+        emit_progress(progress_callback, message, level=level)
 
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
@@ -2183,7 +2181,7 @@ def run_protomer_screening(
 
     try:
         if dry_run:
-            _progress("dry run enabled; skipping screening workflow")
+            _progress("dry run enabled; skipping screening workflow", level=LogLevel.DEFAULT)
             _log_status(log_paths, "SKIP", "dry_run enabled; skipping screening steps")
             return ScreeningWorkflowResult(
                 conformer_energy_kcal_mol=None,
@@ -2262,12 +2260,12 @@ def run_protomer_screening(
         )
         if workflow_result.opt_xyz_path is not None and workflow_result.opt_xyz_path.is_file():
             _set_mol_prop_str(protomer.mol, "screening_opt_xyz_path", str(workflow_result.opt_xyz_path))
-        _progress("finished screening workflow")
+        _progress("finished screening workflow", level=LogLevel.VERBOSE)
 
     except XtbFatalError:
         raise
     except Exception as e:
-        _progress(f"failed screening: {e}")
+        _progress(f"failed screening: {e}", level=LogLevel.DEFAULT)
         _log_status(log_paths, "FAIL", f"screening exception for protomer_id={protomer_id}: {e}")
         warnings.warn(
             f"Screening workflow failed for protomer_id={protomer_id}: {e}",
@@ -2365,10 +2363,9 @@ def run_protomer_solvation(
     instance of each duplicate), and Boltzmann-weights the surviving conformer
     solution-phase energies.
     """
-    def _progress(message: str) -> None:
-        if progress_callback is not None:
-            text = f"[{log_prefix}] {message}" if log_prefix else message
-            progress_callback(text)
+    def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
+        text = f"[{log_prefix}] {message}" if log_prefix else message
+        emit_progress(progress_callback, text, level=level)
 
     scratch_context = _create_scratch_context(scratch_root, protomer_id)
     scratch_dir = scratch_context.scratch_dir
@@ -2399,7 +2396,7 @@ def run_protomer_solvation(
 
     try:
         if dry_run:
-            _progress("dry run enabled; skipping conformer refinement")
+            _progress("dry run enabled; skipping conformer refinement", level=LogLevel.DEFAULT)
             _log_status(log_paths, "SKIP", "dry_run enabled; skipping conformer refinement")
             return SolvationWorkflowResult(
                 conformer_energy_kcal_mol=None,
@@ -2493,12 +2490,11 @@ def run_protomer_solvation(
             conf_label = f"conf {conf_idx + 1}/{n_selected}"
             conf_prefix = f"{log_prefix} {conf_label}" if log_prefix else conf_label
 
-            def _conf_progress(message: str, prefix: str = conf_prefix) -> None:
+            def _conf_progress(message: str, prefix: str = conf_prefix, *, level: LogLevel = LogLevel.VERBOSE) -> None:
                 formatted = f"[{prefix}] {message}"
-                if progress_callback is not None:
-                    progress_callback(formatted)
+                emit_progress(progress_callback, formatted, level=level)
 
-            _conf_progress("running QM workflow")
+            _conf_progress("running QM workflow", level=LogLevel.DEFAULT)
             workflow_result = _run_single_conformer_workflow(
                 conf_protomer,
                 conf_mol,
@@ -2600,12 +2596,12 @@ def run_protomer_solvation(
             aggregate_solution_energy=solution_phase_free_energy_kcal_mol,
             progress_callback=progress_callback,
         )
-        _progress("finished conformer refinement")
+        _progress("finished conformer refinement", level=LogLevel.DEFAULT)
 
     except XtbFatalError:
         raise
     except Exception as exc:
-        _progress(f"failed: {exc}")
+        _progress(f"failed: {exc}", level=LogLevel.DEFAULT)
         _log_status(log_paths, "FAIL", f"conformer refinement exception for protomer_id={protomer_id}: {exc}")
         warnings.warn(
             f"Conformer refinement failed for protomer_id={protomer_id}: {exc}",

@@ -3,6 +3,7 @@ from peace.engine import ChargeEngine
 from peace.common import canon_smiles, show_images, protonate_at_site, deprotonate_at_site
 from peace import visualization
 from peace import __version__
+from peace.logging_utils import LogLevel, log, set_log_level, workflow_bracket_label
 from datetime import datetime
 import time
 from pathlib import Path
@@ -232,6 +233,13 @@ def _build_cli_parser():
         "--exclude-unconverged",
         action="store_true",
         help="Exclude connectivity-mismatch protomers from Boltzmann weighting and f_zwit while still reporting them.",
+    )
+    p.add_argument(
+        "--log-level",
+        type=str,
+        default="default",
+        choices=["default", "verbose", "debug"],
+        help="Console log verbosity: default, verbose, or debug.",
     )
     p.add_argument(
         "--skip-single-protomer-solvation", # TODO: make apply for post-screening step
@@ -475,56 +483,57 @@ def _enumerate_species_protomers(
     def _compact_kept_protomer_ids() -> None:
         remapped = spec.reindex_protomers()
         if remapped:
-            _log("Reindexed kept protomer IDs after deduplication/pruning")
+            log("Reindexed kept protomer IDs after deduplication/pruning", level=LogLevel.DEBUG)
 
     expansion_mode = resolve_site_search_settings(
         context, site_search_mode=site_search_mode
     )
     context_label = "inter-charge" if context == "inter_charge" else "same-charge"
     tautomer_items = list(spec.tautomers.items())
-    _log(f"Tautomer enumeration complete: {len(tautomer_items)} tautomer(s) found")
+    log(f"Tautomer enumeration complete: {len(tautomer_items)} tautomer(s) found")
     for taut_idx, taut in tautomer_items:
         smiles = taut.protomers[0].smiles if 0 in taut.protomers else "N/A"
-        _log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)}: {smiles}")
+        log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)}: {smiles}")
 
     registry = SpeciesProtomerRegistry()
     pre_expansion_removed = registry.seed_from_species(spec)
     if pre_expansion_removed:
-        _log(
+        log(
             f"Species protomer deduplication (pre-expansion): removed {pre_expansion_removed} "
-            f"duplicate(s); {registry.unique_count()} unique canonical protomer(s) remain"
+            f"duplicate(s); {registry.unique_count()} unique canonical protomer(s) remain",
+            level=LogLevel.VERBOSE,
         )
     removed_empty_tautomers = spec.drop_empty_tautomers()
     if removed_empty_tautomers:
-        _log(
+        log(
             "Species protomer deduplication: dropped "
             f"{len(removed_empty_tautomers)} tautomer(s) with no unique protomers: "
-            f"{removed_empty_tautomers}"
+            f"{removed_empty_tautomers}",
+            level=LogLevel.VERBOSE,
         )
     tautomer_items = list(spec.tautomers.items())
 
     if expansion_mode == "none":
-        _log("Skipping protomer enumeration (site-search-mode=none)")
+        log("Skipping protomer enumeration (site-search-mode=none)")
         for taut_idx, taut in tautomer_items:
-            _log(
+            log(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers kept: "
                 f"{len(taut.protomers)}"
             )
         _compact_kept_protomer_ids()
         return
 
-    # TODO: consider refactoring this
     if max_seed_rounds == 0:
-        _log("Skipping protomer expansion (max-seed-rounds=0); keeping base protomer(s) only")
+        log("Skipping protomer expansion (max-seed-rounds=0); keeping base protomer(s) only")
         for taut_idx, taut in tautomer_items:
-            _log(
+            log(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers kept: "
                 f"{len(taut.protomers)}"
             )
         _compact_kept_protomer_ids()
         return
 
-    _log(f"Enumerating protomeric forms for each tautomer ({context_label})")
+    log(f"Enumerating protomeric forms for each tautomer ({context_label})", level=LogLevel.VERBOSE)
 
     for taut_idx, taut in tautomer_items:
         # Iterative protomer expansion:
@@ -532,9 +541,10 @@ def _enumerate_species_protomers(
         # protonation/deprotonation combinations (supports multi-zwitterions).
         reference_protomer = taut.reference_protomer()
         if reference_protomer is None:
-            _log(
+            log(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} skipped: "
-                "no unique protomers after deduplication"
+                "no unique protomers after deduplication",
+                level=LogLevel.DEBUG,
             )
             continue
         n_ionizable_groups = _count_ionizable_groups(
@@ -548,9 +558,10 @@ def _enumerate_species_protomers(
             seed_round_cap_factor=seed_round_cap_factor,
         )
         if round_cap is not None:
-            _log(
+            log(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} seed round cap: {round_cap} "
-                f"({n_ionizable_groups} ionizable group(s) on reference protomer)"
+                f"({n_ionizable_groups} ionizable group(s) on reference protomer)",
+                level=LogLevel.VERBOSE,
             )
 
         seed_queue = list(taut.protomers.values())
@@ -559,10 +570,11 @@ def _enumerate_species_protomers(
 
         while seed_queue:
             if round_cap is not None and round_idx >= round_cap:
-                _log(
+                log(
                     f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} stopping protomer expansion: "
                     f"seed round cap reached ({round_cap} rounds, "
-                    f"{len(seed_queue)} seed(s) remaining in queue)"
+                    f"{len(seed_queue)} seed(s) remaining in queue)",
+                    level=LogLevel.VERBOSE,
                 )
                 break
             round_idx += 1
@@ -583,10 +595,11 @@ def _enumerate_species_protomers(
                 "basic",
                 site_search_mode=expansion_mode,
             )
-            _log(
+            log(
                 f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} round {round_idx} seed={seed_smiles} "
                 f"ionization sites -> acidic={acid_sites if acid_sites else '[]'}, "
-                f"basic={basic_sites if basic_sites else '[]'}"
+                f"basic={basic_sites if basic_sites else '[]'}",
+                level=LogLevel.DEBUG,
             )
             new_protomers = taut.generate_protomers_from_seed_protomer(
                 seed_protomer,
@@ -597,11 +610,15 @@ def _enumerate_species_protomers(
             )
             seed_queue.extend(new_protomers)
 
-        _log(
-            f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers found: {len(taut.protomers)}"
+        log(
+            f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} protomers found: {len(taut.protomers)}",
+            level=LogLevel.VERBOSE,
         )
         for display_idx, (_prot_idx, prot) in enumerate(taut.protomers.items(), start=1):
-            _log(f"    Protomer {display_idx}/{len(taut.protomers)}: {prot.smiles}")
+            log(
+                f"    Protomer {display_idx}/{len(taut.protomers)}: {prot.smiles}",
+                level=LogLevel.VERBOSE,
+            )
 
     if registry.skipped_count:
         unique_total = sum(len(taut.protomers) for _, taut in tautomer_items)
@@ -610,9 +627,10 @@ def _enumerate_species_protomers(
             if registry.resonance_skipped_count
             else ""
         )
-        _log(
+        log(
             f"Species protomer deduplication: removed/skipped {registry.skipped_count} "
-            f"duplicate(s){resonance_note}; {unique_total} unique canonical protomer(s) remain"
+            f"duplicate(s){resonance_note}; {unique_total} unique canonical protomer(s) remain",
+            level=LogLevel.VERBOSE,
         )
     _compact_kept_protomer_ids()
 
@@ -639,14 +657,14 @@ def _seed_adjacent_charge_species(
             site_search_mode=site_search_mode,
         )
         if not shifted_smiles:
-            _log(
+            log(
                 f"  Tautomer {taut_idx + 1}/{len(source_spec.tautomers)}: "
                 f"no charge shifts from {source_protomer_count} protomer(s)"
             )
             continue
 
         if charge_seed_first_only and len(shifted_smiles) > 1:
-            _log(
+            log(
                 f"  Tautomer {taut_idx + 1}/{len(source_spec.tautomers)}: "
                 f"using first of {len(shifted_smiles)} shift(s) "
                 f"(--charge-seed-first-only)"
@@ -654,7 +672,7 @@ def _seed_adjacent_charge_species(
             shifted_smiles = shifted_smiles[:1]
 
         new_tautomers[taut_idx] = _tautomer_from_shifted_smiles(shifted_smiles)
-        _log(
+        log(
             f"  Tautomer {taut_idx + 1}/{len(source_spec.tautomers)}: "
             f"{source_protomer_count} source protomer(s) -> "
             f"{len(shifted_smiles)} shifted protomer(s)"
@@ -667,7 +685,7 @@ def _seed_adjacent_charge_species(
     if not only_protomer_search:
         added_tautomers = _discover_missing_tautomers(spec, engine=engine)
         if added_tautomers:
-            _log(
+            log(
                 f"  Tautomer enumeration added {added_tautomers} structural tautomer(s) "
                 f"not present in the per-tautomer charge-shift pool"
             )
@@ -676,10 +694,6 @@ def _seed_adjacent_charge_species(
 
 def _ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _log(message: str) -> None:
-    print(f"[{_ts()}] {message}", flush=True)
 
 
 def _set_optional_double_prop(protomer, key: str, value: Optional[float]) -> None:
@@ -760,6 +774,7 @@ if __name__ == "__main__":
     start_ts = time.time()
     parser = _build_cli_parser()
     args = parser.parse_args()
+    set_log_level(args.log_level)
     if int(args.charge_min) > int(args.charge_max):
         parser.error("--charge-min must be <= --charge-max")
     if args.plot in ("cutoff", "count") and args.plot_filter is None:
@@ -783,15 +798,15 @@ if __name__ == "__main__":
             parser.error(str(exc))
 
     if args.plot_from_csv:
-        _log(_header_banner())
-        _log(f"Version: {__version__}")
+        log(_header_banner())
+        log(f"Version: {__version__}")
         csv_path = Path(args.plot_from_csv)
         if not csv_path.is_file():
             parser.error(f"--plot-from-csv file not found: {csv_path}")
-        _log(f"Rendering protomer plots from CSV: {csv_path.resolve()}")
-        _log(f"Plotmode: {args.plot}")
+        log(f"Rendering protomer plots from CSV: {csv_path.resolve()}")
+        log(f"Plotmode: {args.plot}")
         if args.plot_filter is not None:
-            _log(f"Plot filter: {args.plot_filter}")
+            log(f"Plot filter: {args.plot_filter}")
         df_plot = pd.read_csv(csv_path)
         imgs = visualization.plot_from_dataframe(
             df_plot,
@@ -803,20 +818,20 @@ if __name__ == "__main__":
             save_path = Path(args.output_plots) if args.output_plots else None
             show_images(imgs, mode="vertical", save_path=save_path)
             if save_path is not None:
-                _log(f"Saved protomer plot to: {save_path.resolve()}")
+                log(f"Saved protomer plot to: {save_path.resolve()}")
         else:
-            _log("No protomer images produced (empty filter or empty CSV).")
+            log("No protomer images produced (empty filter or empty CSV).")
         end_ts = time.time()
-        _log(f"Run finished at: {_ts()}")
-        _log(f"Execution time: {end_ts - start_ts:.2f} s")
+        log(f"Run finished at: {_ts()}")
+        log(f"Execution time: {end_ts - start_ts:.2f} s")
         raise SystemExit(0)
     run_started_at = _ts()
-    _log(_header_banner())
-    _log(f"Version: {__version__}")
-    _log(f"Run started at: {run_started_at}")
-    _log(f"Input SMILES: {args.smiles}")
-    _log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
-    _log(
+    log(_header_banner())
+    log(f"Version: {__version__}")
+    log(f"Run started at: {run_started_at}")
+    log(f"Input SMILES: {args.smiles}")
+    log(f"Requested formal charge range: [{int(args.charge_min)}, {int(args.charge_max)}]")
+    log(
         "Site search mode: "
         + (
             f"{args.site_search_mode} (all contexts)"
@@ -824,17 +839,17 @@ if __name__ == "__main__":
             else "context defaults (same/inter-charge: strong+weak; cross-charge: all)"
         )
     )
-    _log(f"Solvent: {solvent.alpb} (CPCM-X: {solvent.cpcm})")
+    log(f"Solvent: {solvent.alpb} (CPCM-X: {solvent.cpcm})")
     if args.only_protomer_search:
-        _log("Tautomer enumeration: disabled (--only-protomer-search)")
+        log("Tautomer enumeration: disabled (--only-protomer-search)")
     if args.charge_seed_first_only:
-        _log("Charge seeding: first shift only (--charge-seed-first-only)")
+        log("Charge seeding: first shift only (--charge-seed-first-only)")
     if args.max_seed_rounds is not None and args.max_seed_rounds < 0:
-        _log("Seed round cap: disabled")
+        log("Seed round cap: disabled")
     elif args.max_seed_rounds is not None:
-        _log(f"Seed round cap: {args.max_seed_rounds} rounds per tautomer")
+        log(f"Seed round cap: {args.max_seed_rounds} rounds per tautomer")
     else:
-        _log(
+        log(
             "Seed round cap: "
             f"{args.seed_round_cap_factor:g} × ionizable groups per tautomer"
         )
@@ -846,8 +861,8 @@ if __name__ == "__main__":
         only_protomer_search=args.only_protomer_search,
     )
     seed_charge = AllChem.GetFormalCharge(seed_spec.tautomers[0].protomers[0].mol)
-    _log(f"Input SMILES seed formal charge: {seed_charge}")
-    _log(f"Generating seed Species at charge {seed_charge}")
+    log(f"Input SMILES seed formal charge: {seed_charge}")
+    log(f"Generating seed Species at charge {seed_charge}")
     _enumerate_species_protomers(
         seed_spec,
         engine=engine,
@@ -867,7 +882,7 @@ if __name__ == "__main__":
     current_spec = seed_spec
     while current_charge - 1 >= charge_min:
         target_charge = current_charge - 1
-        _log(f"Attempting to seed charge state {target_charge} from {current_charge}")
+        log(f"Attempting to seed charge state {target_charge} from {current_charge}")
         next_spec = _seed_adjacent_charge_species(
             current_spec,
             engine=engine,
@@ -877,7 +892,7 @@ if __name__ == "__main__":
             only_protomer_search=args.only_protomer_search,
         )
         if next_spec is None:
-            _log(
+            log(
                 f"No matching deprotonation found while searching charge {target_charge}; "
                 "stopping lower-charge branch."
             )
@@ -899,7 +914,7 @@ if __name__ == "__main__":
     current_spec = seed_spec
     while current_charge + 1 <= charge_max:
         target_charge = current_charge + 1
-        _log(f"Attempting to seed charge state {target_charge} from {current_charge}")
+        log(f"Attempting to seed charge state {target_charge} from {current_charge}")
         next_spec = _seed_adjacent_charge_species(
             current_spec,
             engine=engine,
@@ -909,7 +924,7 @@ if __name__ == "__main__":
             only_protomer_search=args.only_protomer_search,
         )
         if next_spec is None:
-            _log(
+            log(
                 f"No matching protonation found while searching charge {target_charge}; "
                 "stopping higher-charge branch."
             )
@@ -928,7 +943,7 @@ if __name__ == "__main__":
 
     requested_charges = [c for c in sorted(species_by_charge.keys()) if charge_min <= c <= charge_max]
     if not requested_charges:
-        _log("No species generated inside the requested charge window.")
+        log("No species generated inside the requested charge window.")
 
     ######################
     # Solvation workflow
@@ -971,14 +986,14 @@ if __name__ == "__main__":
                     only_protomer.mol.SetDoubleProp("solution_phase_free_energy_kcal_mol", -10000.0)
                     only_protomer.mol.SetProp("workflow_status", "single_protomer_default_energy")
                     only_protomer.mol.SetProp("solvent", solvent.alpb)
-                _log(
+                log(
                     "Skipping solvation workflow for single-tautomer/single-protomer species "
                     f"(charge={charge_state}); assigned default solution-phase free energy = -10000.0 kcal/mol."
                 )
             else:
                 if species_scratch.exists():
                     if args.override_solvation:
-                        _log(f"Override enabled: removing existing optimization folder {species_scratch}")
+                        log(f"Override enabled: removing existing optimization folder {species_scratch}")
                         shutil.rmtree(species_scratch, ignore_errors=True)
                     else:
                         raise FileExistsError(
@@ -994,17 +1009,20 @@ if __name__ == "__main__":
                     for prot_idx, protomer in taut.protomers.items()
                 ]
 
-                _log(f" *** GENERATING CONFORMERS FOR ALL PROTOMERS (charge={charge_state}) *** ")
+                log(f" *** GENERATING CONFORMERS FOR ALL PROTOMERS (charge={charge_state}) *** ")
                 run_batch_conformer_generation(
                     all_protomer_refs,
                     conformer_mode=args.conformer_mode,
                     external_xyz_path=args.external_xyz,
                     scratch_root=species_scratch / "conformer_generation",
                     dry_run=bool(args.dry_run),
-                    progress_callback=lambda stage: _log(f"  [conformers] {stage}"),
+                    progress_callback=lambda stage, level=LogLevel.VERBOSE: log(
+                        f"  [conformers] {stage}",
+                        level=level,
+                    ),
                 )
 
-                _log(f" *** SCREENING PROTOMERS (charge={charge_state}) ON KDG GEOMETRIES... *** ")
+                log(f" *** SCREENING PROTOMERS (charge={charge_state}) ON KDG GEOMETRIES... *** ")
                 screening_records: list[tuple[int, int, Any, Optional[float]]] = []
                 for taut_idx, prot_idx, protomer in all_protomer_refs:
                     n_prot = len(spec.tautomers[taut_idx].protomers)
@@ -1015,7 +1033,7 @@ if __name__ == "__main__":
                         prot_idx,
                         n_prot,
                     )
-                    _log(f"Screening [{prefix}]")
+                    log(f"Screening {workflow_bracket_label(prefix, protomer.smiles)}")
                     screening_result = run_protomer_screening(
                         protomer,
                         protomer_id=f"{prot_idx}_screen",
@@ -1030,7 +1048,10 @@ if __name__ == "__main__":
                         keep_scratch=bool(args.keep_scratch),
                         keep_logs=bool(args.keep_logs),
                         dry_run=bool(args.dry_run),
-                        progress_callback=lambda stage, prefix=prefix: _log(f"  [{prefix}] {stage}"),
+                        progress_callback=lambda stage, prefix=prefix, level=LogLevel.VERBOSE: log(
+                            f"  {workflow_bracket_label(prefix)} {stage}",
+                            level=level,
+                        ),
                     )
                     screening_records.append(
                         (
@@ -1044,7 +1065,7 @@ if __name__ == "__main__":
                 valid_screening = [row for row in screening_records if row[3] is not None]
                 min_screening_solution_energy = min((row[3] for row in valid_screening), default=None)
                 if min_screening_solution_energy is None:
-                    _log("Screening did not produce any valid solution-phase energies; keeping all protomers for full optimization.")
+                    log("Screening did not produce any valid solution-phase energies; keeping all protomers for full optimization.")
 
                 protomers_to_optimize: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
                 screened_out: list[tuple[int, int, Any, Optional[float], Optional[float]]] = []
@@ -1058,14 +1079,14 @@ if __name__ == "__main__":
                     else:
                         protomers_to_optimize.append((taut_idx, prot_idx, protomer, screening_energy, screen_delta))
 
-                _log(
+                log(
                     "Screening finished: "
                     f"kept={len(protomers_to_optimize)} "
                     f"excluded={len(screened_out)} "
                     f"threshold={float(args.screen_threshold):.2f} kcal/mol"
                 )
 
-                _log(" *** CONFORMER REFINEMENT FOR SCREENED-IN PROTOMERS ***")
+                log(" *** CONFORMER REFINEMENT FOR SCREENED-IN PROTOMERS ***")
                 for taut_idx, prot_idx, protomer, _screening_energy, _screen_delta in protomers_to_optimize:
                     protomer_items = list(spec.tautomers[taut_idx].protomers.items())
                     prefix = _workflow_log_prefix(
@@ -1075,7 +1096,7 @@ if __name__ == "__main__":
                         prot_idx,
                         len(protomer_items),
                     )
-                    _log(f"Refining conformers [{prefix}]")
+                    log(f"Refining conformers {workflow_bracket_label(prefix, protomer.smiles)}")
                     run_protomer_solvation(
                         protomer,
                         protomer_id=str(prot_idx),
@@ -1096,7 +1117,10 @@ if __name__ == "__main__":
                         embedded_conformers=args.embedded_conformers,
                         conformer_energy_threshold_kcal_mol=float(args.conformer_energy_threshold),
                         log_prefix=prefix,
-                        progress_callback=lambda stage: _log(f"  {stage}"),
+                        progress_callback=lambda stage, level=LogLevel.DEFAULT: log(
+                            f"  {stage}",
+                            level=level,
+                        ),
                     )
         
 
@@ -1107,7 +1131,7 @@ if __name__ == "__main__":
                 ]
                 min_postopt_solution_energy = min(optimized_energies) if optimized_energies else None
                 if min_postopt_solution_energy is None:
-                    _log("No valid post-optimization solution energies found to backfill screened-out protomers.")
+                    log("No valid post-optimization solution energies found to backfill screened-out protomers.")
 
                 # Backfill screened-in protomers that failed conformer refinement.
                 for taut_idx, prot_idx, protomer, screening_energy, screen_delta in protomers_to_optimize:
@@ -1127,7 +1151,7 @@ if __name__ == "__main__":
                     protomer.mol.SetProp("screening_placeholder_from_failed_postopt", "true")
                     if not protomer.mol.HasProp("workflow_status"):
                         protomer.mol.SetProp("workflow_status", "selected_but_postopt_failed")
-                    _log(
+                    log(
                         "Backfilled screened-in protomer with placeholder energy "
                         f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
                         f"screen_delta={screen_delta} "
@@ -1145,17 +1169,18 @@ if __name__ == "__main__":
                         baseline_energy=min_postopt_solution_energy,
                     )
                     protomer.mol.SetProp("workflow_status", "post_xtb_screened_out")
-                    _log(
+                    log(
                         "Screened out protomer "
                         f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
                         f"screen_delta={screen_delta} "
-                        f"placeholder_solution_energy={placeholder_energy}"
+                        f"placeholder_solution_energy={placeholder_energy}",
+                        level=LogLevel.VERBOSE,
                     )
 
             if not skip_single:
-                _log(f"Optimization outputs saved under: {species_scratch}")
+                log(f"Optimization outputs saved under: {species_scratch}")
 
-            _log(f"Calculating Boltzmann populations for charge={charge_state}")
+            log(f"Calculating Boltzmann populations for charge={charge_state}")
             excluded_unconverged_count = 0
             if args.exclude_unconverged:
                 for taut in tautomer_items:
@@ -1166,7 +1191,7 @@ if __name__ == "__main__":
                             and protomer.mol.GetProp("connectivity_mismatch").lower() == "true"
                         ):
                             excluded_unconverged_count += 1
-                _log(
+                log(
                     "Excluding connectivity-mismatch protomers from Boltzmann weighting: "
                     f"count={excluded_unconverged_count}"
                 )
@@ -1175,16 +1200,16 @@ if __name__ == "__main__":
                 exclude_connectivity_mismatch=bool(args.exclude_unconverged),
             )
             f_zwit = spec.get_f_zwit()
-            _log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.16f}")
+            log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.16f}")
             for taut_idx, taut in tautomer_items:
-                _log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
+                log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
                 for prot_idx, protomer in taut.protomers.items():
                     frac = (
                         protomer.mol.GetProp("boltzmann_fraction")
                         if protomer.mol is not None and protomer.mol.HasProp("boltzmann_fraction")
                         else "N/A"
                     )
-                    _log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)} ({protomer.smiles}): {frac}")
+                    log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)} ({protomer.smiles}): {frac}")
 
     frames = []
     for charge_state in requested_charges:
@@ -1207,14 +1232,14 @@ if __name__ == "__main__":
         output_path = Path(args.output_csv)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, index=False)
-        _log(f"Saved dataframe CSV to: {output_path.resolve()}")
+        log(f"Saved dataframe CSV to: {output_path.resolve()}")
 
     print(df)
 
     if not args.no_plot:
         for charge_state in requested_charges:
             spec = species_by_charge[charge_state]
-            _log(
+            log(
                 f"Rendering protomer plots for charge={charge_state} "
                 f"(mode={args.plot}"
                 + (f", filter={args.plot_filter})" if args.plot_filter is not None else ")")
@@ -1238,10 +1263,10 @@ if __name__ == "__main__":
                     save_path = None
                 show_images(imgs, mode="vertical", save_path=save_path)
                 if save_path is not None:
-                    _log(f"Saved protomer plot to: {save_path.resolve()}")
+                    log(f"Saved protomer plot to: {save_path.resolve()}")
             else:
-                _log("No protomer images produced for this charge state.")
+                log("No protomer images produced for this charge state.")
 
     end_ts = time.time()
-    _log(f"Run finished at: {_ts()}")
-    _log(f"Execution time: {end_ts - start_ts:.2f} s")
+    log(f"Run finished at: {_ts()}")
+    log(f"Execution time: {end_ts - start_ts:.2f} s")
