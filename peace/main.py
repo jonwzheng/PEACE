@@ -1171,38 +1171,38 @@ if __name__ == "__main__":
                     level=LogLevel.VERBOSE,
                 )
 
-        log(f"Optimization outputs saved under: {species_scratch}")
+            log(f"Optimization outputs saved under: {species_scratch}")
 
-        log(f"Calculating Boltzmann populations for charge={charge_state}")
-        excluded_unconverged_count = 0
-        if args.exclude_unconverged:
-            for taut in tautomer_items:
-                for protomer in taut[1].protomers.values():
-                    if (
-                        protomer.mol is not None
-                        and protomer.mol.HasProp("connectivity_mismatch")
-                        and protomer.mol.GetProp("connectivity_mismatch").lower() == "true"
-                    ):
-                        excluded_unconverged_count += 1
-            log(
-                "Excluding connectivity-mismatch protomers from Boltzmann weighting: "
-                f"count={excluded_unconverged_count}"
-            )
-        spec.assign_boltzmann_microstate_populations(
-            temperature_k=298.15,
-            exclude_connectivity_mismatch=bool(args.exclude_unconverged),
-        )
-        f_zwit = spec.get_f_zwit()
-        log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.16f}")
-        for taut_idx, taut in tautomer_items:
-            log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
-            for prot_idx, protomer in taut.protomers.items():
-                frac = (
-                    protomer.mol.GetProp("boltzmann_fraction")
-                    if protomer.mol is not None and protomer.mol.HasProp("boltzmann_fraction")
-                    else "N/A"
+            log(f"Calculating Boltzmann populations for charge={charge_state}")
+            excluded_unconverged_count = 0
+            if args.exclude_unconverged:
+                for taut in tautomer_items:
+                    for protomer in taut[1].protomers.values():
+                        if (
+                            protomer.mol is not None
+                            and protomer.mol.HasProp("connectivity_mismatch")
+                            and protomer.mol.GetProp("connectivity_mismatch").lower() == "true"
+                        ):
+                            excluded_unconverged_count += 1
+                log(
+                    "Excluding connectivity-mismatch protomers from Boltzmann weighting: "
+                    f"count={excluded_unconverged_count}"
                 )
-                log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)} ({protomer.smiles}): {frac}")
+            spec.assign_boltzmann_microstate_populations(
+                temperature_k=298.15,
+                exclude_connectivity_mismatch=bool(args.exclude_unconverged),
+            )
+            f_zwit = spec.get_f_zwit()
+            log(f"Total predicted zwitterion fraction (f_zwit) for charge={charge_state}: {f_zwit:.16f}")
+            for taut_idx, taut in tautomer_items:
+                log(f"  Tautomer {taut_idx + 1}/{len(tautomer_items)} Boltzmann populations:")
+                for prot_idx, protomer in taut.protomers.items():
+                    frac = (
+                        protomer.mol.GetProp("boltzmann_fraction")
+                        if protomer.mol is not None and protomer.mol.HasProp("boltzmann_fraction")
+                        else "N/A"
+                    )
+                    log(f"    Protomer {prot_idx + 1}/{len(taut.protomers)} ({protomer.smiles}): {frac}")
 
     frames = []
     for charge_state in requested_charges:
