@@ -1,4 +1,4 @@
-# PEACE: Protomer Enumeration and Charge Engine
+# PEACE: Protomer Enumeration and Computed Energies
 
 ![PEACE Logo](docs/static/header.svg)
 
