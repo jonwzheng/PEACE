@@ -9,7 +9,12 @@
 More details forthcoming.
 
 ## Getting started
-Simply clone this repo and add this base directory to PATH, or run calculations directly from here.
+1. Clone this repo and add this base directory to PATH, or run calculations directly from here.
+2. Install the project dependencies in `pyproject.toml` using `uv` or `pip`.
+3. If using free energy simulations, install `gxtb` version 2.0.1 or greater into `bin`. If running into issues, one can also install `gxtb` version 2.0.0, and separately install `xtb` and `cpcm` because the solvation model was not included in the 2.0.0 binary. (If this is done, set `--xtb-version` to `legacy`.)
+
+Example run:
+`python -m peace.main --smiles "NCC(=O)O" --solvation`
 
 For the estimation of individual protomer populations, the user needs to install CREST, xTB with CPCM-X, and g-xTB with the respective binary or execution script added to path.
 
@@ -17,9 +22,8 @@ For the estimation of individual protomer populations, the user needs to install
 
 1. **Tautomer Enumeration** using RDKit.
 2. **Protomer Enumeration** by searching each tautomer for acid/base sites and sequentially (de)protonating all possible combinations (this searches for zwitterion forms).
-3. **Visualization** of all relevant tautomer-protomers based on their graph representations. 
-4. **(Optional) Microstate Population Estimation** using quantum-chemical calculations:
+3. **(Optional) Microstate Population Estimation** using quantum-chemical calculations:
    - **Screening**: KDG conformer → CPCM-X, g-xTB gas-phase SP, and RRHO on the screening geometry.
-   - **Refinement** (screened-in protomers): MMFF94-ranked conformer ensemble -> GFN2-xTB/ALPB optimization -> CPCM-X, g-xTB SP, and RRHO on the ALPB geometry by default.
-   - Pass `--gxtb-optimize` to additionally re-optimize each refined conformer at g-xTB gas phase before its g-xTB SP and frequency steps.
+   - **Refinement** (screened-in protomers): MMFF94-ranked conformer ensemble -> GFN2-xTB/ALPB optimization -> re-optimize at g-xTB gas phase.CPCM-X on GFN2-xTB/ALPB geometry; g-xTB SP and RRHO on the g-xTB geometry by default. Pass `--no-gxtb-optimize` to instead have all energy calculations done at the GFN2-xTB/ALPB geometry. 
    It is planned that a machine learning model will be made available to speed this up.
+4. **Visualization** of all relevant tautomer-protomers based on their graph representations. 
