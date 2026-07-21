@@ -1,4 +1,4 @@
-# PEACE: Protomer Enumeration and Computed Energies
+# PEACE: Protomer Enumerator & Automatic Calculator for Energies
 
 ![PEACE Logo](docs/static/header.svg)
 
@@ -20,6 +20,6 @@ For the estimation of individual protomer populations, the user needs to install
 3. **Visualization** of all relevant tautomer-protomers based on their graph representations. 
 4. **(Optional) Microstate Population Estimation** using quantum-chemical calculations:
    - **Screening**: KDG conformer → CPCM-X, g-xTB gas-phase SP, and RRHO on the screening geometry.
-   - **Refinement** (screened-in protomers): MMFF94-ranked conformer ensemble → GFN2-xTB/ALPB optimization → CPCM-X, g-xTB SP, and RRHO on the ALPB geometry by default.
+   - **Refinement** (screened-in protomers): MMFF94-ranked conformer ensemble -> GFN2-xTB/ALPB optimization -> CPCM-X, g-xTB SP, and RRHO on the ALPB geometry by default.
    - Pass `--gxtb-optimize` to additionally re-optimize each refined conformer at g-xTB gas phase before its g-xTB SP and frequency steps.
    It is planned that a machine learning model will be made available to speed this up.
