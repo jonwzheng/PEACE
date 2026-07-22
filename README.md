@@ -13,6 +13,8 @@
 
 Example setup with pip:
 ```
+git clone git@github.com:jonwzheng/PEACE.git
+cd PEACE
 python -m venv peace_env
 source peace_env/bin/activate
 pip install -e .
