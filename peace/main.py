@@ -3,6 +3,7 @@ from peace.engine import ChargeEngine
 from peace.common import canon_smiles, show_images, protonate_at_site, deprotonate_at_site
 from peace import visualization
 from peace import __version__
+from peace.calculators.common import DEFAULT_TEMPERATURE_K
 from peace.logging_utils import (
     LogLevel,
     clear_user_warnings,
@@ -180,6 +181,15 @@ def _build_cli_parser():
         type=str,
         default="xtb",
         help="xTB binary name or path (required with --solvation; must match --xtb-version).",
+    )
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=DEFAULT_TEMPERATURE_K,
+        help=(
+            "Temperature in Kelvin for RRHO thermochemistry (via `xtb thermo --temp`) "
+            f"and Boltzmann weighting of conformers/protomers (default: {DEFAULT_TEMPERATURE_K:g})."
+        ),
     )
     p.add_argument(
         "--solvent",
@@ -787,10 +797,14 @@ if __name__ == "__main__":
     set_crash_on_warning(bool(args.crash_on_warning))
     if int(args.charge_min) > int(args.charge_max):
         parser.error("--charge-min must be <= --charge-max")
+    if float(args.temperature) <= 0:
+        parser.error("--temperature must be > 0 K")
     if args.plot in ("cutoff", "count") and args.plot_filter is None:
         parser.error(f"--plot-filter is required when --plot={args.plot}")
     if args.plot_from_csv and args.no_plot:
         parser.error("--plot-from-csv cannot be combined with --no-plot")
+
+    temperature_k = float(args.temperature)
 
     from peace.solvents import resolve_solvent
 
@@ -850,6 +864,7 @@ if __name__ == "__main__":
         )
     )
     log(f"Solvent: {solvent.alpb} (CPCM-X: {solvent.cpcm})")
+    log(f"Temperature: {temperature_k:g} K")
     if args.only_protomer_search:
         log("Tautomer enumeration: disabled (--only-protomer-search)")
     if args.charge_seed_first_only:
@@ -1042,6 +1057,7 @@ if __name__ == "__main__":
                     keep_scratch=bool(args.keep_scratch),
                     keep_logs=bool(args.keep_logs),
                     dry_run=bool(args.dry_run),
+                    temperature_k=temperature_k,
                     progress_callback=lambda stage, prefix=prefix, level=LogLevel.VERBOSE: log(
                         f"  {workflow_bracket_label(prefix)} {stage}",
                         level=level,
@@ -1110,6 +1126,7 @@ if __name__ == "__main__":
                     max_qm_conformers=int(args.max_conformers),
                     embedded_conformers=args.embedded_conformers,
                     conformer_energy_threshold_kcal_mol=float(args.conformer_energy_threshold),
+                    temperature_k=temperature_k,
                     log_prefix=prefix,
                     progress_callback=lambda stage, level=LogLevel.DEFAULT: log(
                         f"  {stage}",
@@ -1173,7 +1190,7 @@ if __name__ == "__main__":
 
             log(f"Optimization outputs saved under: {species_scratch}")
 
-            log(f"Calculating Boltzmann populations for charge={charge_state}")
+            log(f"Calculating Boltzmann populations for charge={charge_state} at T={temperature_k:g} K")
             excluded_unconverged_count = 0
             if args.exclude_unconverged:
                 for taut in tautomer_items:
@@ -1189,7 +1206,7 @@ if __name__ == "__main__":
                     f"count={excluded_unconverged_count}"
                 )
             spec.assign_boltzmann_microstate_populations(
-                temperature_k=298.15,
+                temperature_k=temperature_k,
                 exclude_connectivity_mismatch=bool(args.exclude_unconverged),
             )
             f_zwit = spec.get_f_zwit()

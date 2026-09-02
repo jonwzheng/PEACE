@@ -9,6 +9,7 @@ from .common import (
     canon_smiles,
     canonicalize_atom_order,
 )
+from .calculators.common import DEFAULT_TEMPERATURE_K
 
 import copy
 import itertools
@@ -590,7 +591,7 @@ class Species:
     def assign_boltzmann_microstate_populations(
         self,
         *,
-        temperature_k: float = 298.15,
+        temperature_k: float = DEFAULT_TEMPERATURE_K,
         energy_prop: str = "solution_phase_free_energy_kcal_mol",
         exclude_connectivity_mismatch: bool = False,
     ) -> pd.DataFrame:

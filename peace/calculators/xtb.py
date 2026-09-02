@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 from rdkit import Chem
 
-from .common import HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
+from .common import DEFAULT_TEMPERATURE_K, HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
 
 XTB_ERROR_MARKER = "[ERROR]"
 XTB_INPUT_WARNING_MARKER = "[WARNING] Please study the warnings concerning your input carefully"
@@ -601,7 +601,19 @@ def run_hessian_and_parse_energies(
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
     log_status: Callable[[list[Path], str, str], None],
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Run xTB Hessian, then recompute RRHO thermo at ``temperature_k``.
+
+    ``xtb --hess`` always evaluates thermochemistry at 298.15 K in current xTB
+    builds (``--temp`` is not accepted on the main CLI). After a successful
+    Hessian, PEACE therefore runs ``xtb thermo --temp <T>`` on the produced
+    ``hessian`` file so RRHO contributions match the requested temperature.
+    Electronic / TOTAL ENERGY is still taken from the Hessian stdout.
+    """
+    if temperature_k <= 0:
+        raise ValueError(f"temperature_k must be > 0 K, got {temperature_k}")
+
     cmd_hess = [
         xtb_executable,
         str(xyz_path.name),
@@ -630,7 +642,70 @@ def run_hessian_and_parse_energies(
         )
 
     gas_sp_energy_h = parse_xtb_total_energy_hartree(cp_hess.stdout)
-    rrho_contrib_h = parse_xtb_rrho_contrib_hartree(cp_hess.stdout)
+
+    # Re-evaluate RRHO at the requested temperature via `xtb thermo`.
+    # Fall back to Hessian stdout RRHO only if thermo cannot be run (dry-run /
+    # missing hessian artifact).
+    rrho_contrib_h = None
+    hessian_path = scratch_dir / "hessian"
+    cmd_thermo = [
+        xtb_executable,
+        "thermo",
+        "--temp",
+        str(temperature_k),
+        str(xyz_path.name),
+        "hessian",
+    ]
+    log_status(
+        log_paths,
+        "STEP",
+        f"running thermo at T={temperature_k:g} K: {' '.join(shlex.quote(x) for x in cmd_thermo)}",
+    )
+    if dry_run:
+        run_command(cmd_thermo, cwd=scratch_dir, dry_run=True)
+        rrho_contrib_h = parse_xtb_rrho_contrib_hartree(cp_hess.stdout)
+    elif hessian_path.is_file():
+        cp_thermo = run_command(cmd_thermo, cwd=scratch_dir, dry_run=False)
+        thermo_log_path = scratch_dir / "xtbthermo_run.log"
+        thermo_log_path.write_text(cp_thermo.stdout)
+        log_status(log_paths, "OK", f"saved thermo stdout to {thermo_log_path.name}")
+        if cp_thermo.returncode != 0:
+            log_status(
+                log_paths,
+                "FAIL",
+                f"thermo failed returncode={cp_thermo.returncode} "
+                f"stdout_tail={cp_thermo.stdout[-1000:]} stderr_tail={cp_thermo.stderr[-1000:]}",
+            )
+            raise RuntimeError(
+                f"xTB thermo calculation failed with code {cp_thermo.returncode}.\n"
+                f"stdout:\n{cp_thermo.stdout[-4000:]}\n"
+                f"stderr:\n{cp_thermo.stderr[-4000:]}\n"
+            )
+        rrho_contrib_h = parse_xtb_rrho_contrib_hartree(cp_thermo.stdout)
+        if rrho_contrib_h is None:
+            warnings.warn(
+                f"Could not parse G(RRHO) contrib. from xtb thermo output at T={temperature_k:g} K. "
+                "Falling back to Hessian-stdout RRHO (298.15 K).",
+                RuntimeWarning,
+            )
+            log_status(
+                log_paths,
+                "WARN",
+                "failed to parse RRHO from thermo output; falling back to hessian stdout",
+            )
+            rrho_contrib_h = parse_xtb_rrho_contrib_hartree(cp_hess.stdout)
+    else:
+        warnings.warn(
+            "xTB Hessian finished but 'hessian' file was not produced; "
+            "using RRHO from Hessian stdout (298.15 K).",
+            RuntimeWarning,
+        )
+        log_status(
+            log_paths,
+            "WARN",
+            "hessian artifact missing; using RRHO from hessian stdout (298.15 K)",
+        )
+        rrho_contrib_h = parse_xtb_rrho_contrib_hartree(cp_hess.stdout)
 
     gas_sp_energy_kcal_mol = None
     if gas_sp_energy_h is not None:

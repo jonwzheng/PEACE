@@ -34,7 +34,7 @@ from .calculators import (
     run_xtb_optimization,
 )
 from .calculators.xtb import XTB_SCF_RETRY_MARKER_FILE
-from .calculators.common import opt_convergence_retry_levels
+from .calculators.common import DEFAULT_TEMPERATURE_K, opt_convergence_retry_levels
 from .protomer import Protomer, Species, Tautomer
 from .solvents import SolventNames, resolve_solvent
 
@@ -118,8 +118,10 @@ def _numeric_energy_values(values: list[EnergyListValue]) -> list[float]:
 def _boltzmann_aggregate_energy(
     energies: list[EnergyListValue],
     *,
-    temperature_k: float = 298.15,
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> Optional[float]:
+    if temperature_k <= 0:
+        raise ValueError(f"temperature_k must be > 0 K, got {temperature_k}")
     numeric = _numeric_energy_values(energies)
     if not numeric:
         return None
@@ -999,6 +1001,7 @@ def _try_hessian_with_fallback(
     gfn: int,
     dry_run: bool,
     log_paths: list[Path],
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
     if primary_xyz_path is not None:
         gxtb_hess_scratch = scratch_dir / "hess_gxtb"
@@ -1014,6 +1017,7 @@ def _try_hessian_with_fallback(
                 log_paths=log_paths,
                 run_command=_run_xtb,
                 log_status=_log_status,
+                temperature_k=temperature_k,
             )
             if gas_sp_energy_xtb_kcal_mol is not None and rrho_contribution_kcal_mol is not None:
                 _log_status(log_paths, "OK", "RRHO computed at g-xTB gas-phase geometry")
@@ -1045,6 +1049,7 @@ def _try_hessian_with_fallback(
         log_paths=log_paths,
         run_command=_run_xtb,
         log_status=_log_status,
+        temperature_k=temperature_k,
     )
 
 
@@ -1715,7 +1720,7 @@ def _persist_conformer_ensemble_results(
     charge: int,
     conformer_terms: list[ConformerEnergyTerms],
     conformer_labels: Optional[list[str]] = None,
-    temperature_k: float = 298.15,
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> None:
     if protomer.mol is None:
         return
@@ -1770,6 +1775,7 @@ def _run_screening_conformer_workflow(
     gfn: int,
     dry_run: bool,
     log_paths: list[Path],
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> ConformerWorkflowResult:
     """
@@ -1846,7 +1852,10 @@ def _run_screening_conformer_workflow(
                 f"screening g-xTB SP geometry={screening_geom_path.name} scratch={gxtb_xyz_path}",
             )
 
-            _progress("computing RRHO contribution with xTB frequencies at seeded screening geometry")
+            _progress(
+                f"computing RRHO contribution with xTB frequencies at seeded screening geometry "
+                f"(T={temperature_k:g} K)"
+            )
             gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, _ = _try_hessian_with_fallback(
                 primary_xyz_path=None,
                 fallback_xyz_path=screening_geom_path,
@@ -1856,6 +1865,7 @@ def _run_screening_conformer_workflow(
                 gfn=gfn,
                 dry_run=dry_run,
                 log_paths=log_paths,
+                temperature_k=temperature_k,
             )
         except XtbFatalError as exc:
             report_xtb_fatal_and_exit(exc)
@@ -1936,6 +1946,7 @@ def _run_single_conformer_workflow(
     gxtb_optimize: bool = False,
     dry_run: bool,
     log_paths: list[Path],
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> ConformerWorkflowResult:
     """
@@ -2095,14 +2106,20 @@ def _run_single_conformer_workflow(
                 )
 
             if gxtb_opt_xyz_path is not None:
-                _progress("computing RRHO contribution with xTB frequencies at g-xTB-optimized geometry")
+                _progress(
+                    f"computing RRHO contribution with xTB frequencies at g-xTB-optimized geometry "
+                    f"(T={temperature_k:g} K)"
+                )
                 _log_status(
                     log_paths,
                     "GEOM",
                     f"refinement RRHO primary geometry={gxtb_opt_xyz_path.name} fallback={solvation_xyz_path.name}",
                 )
             else:
-                _progress("computing RRHO contribution with xTB frequencies at GFN2-xTB/ALPB geometry")
+                _progress(
+                    f"computing RRHO contribution with xTB frequencies at GFN2-xTB/ALPB geometry "
+                    f"(T={temperature_k:g} K)"
+                )
                 _log_status(
                     log_paths,
                     "GEOM",
@@ -2117,6 +2134,7 @@ def _run_single_conformer_workflow(
                 gfn=gfn,
                 dry_run=dry_run,
                 log_paths=log_paths,
+                temperature_k=temperature_k,
             )
         except XtbFatalError as exc:
             report_xtb_fatal_and_exit(exc)
@@ -2198,6 +2216,7 @@ def run_protomer_screening(
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
     dry_run: bool = False,
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> ScreeningWorkflowResult:
     """
@@ -2230,7 +2249,7 @@ def run_protomer_screening(
         "START",
         f"screening protomer_id={protomer_id} scratch_dir={scratch_dir.name} charge={charge} "
         f"solvent_alpb={solvent.alpb} solvent_cpcm={solvent.cpcm} "
-        f"conformer_mode={conformer_mode} xtb_version={xtb_version}",
+        f"conformer_mode={conformer_mode} xtb_version={xtb_version} temperature_k={temperature_k:g}",
     )
     _progress("preparing conformer")
 
@@ -2274,6 +2293,7 @@ def run_protomer_screening(
             gfn=gfn,
             dry_run=dry_run,
             log_paths=log_paths,
+            temperature_k=temperature_k,
             progress_callback=_progress,
         )
         terms = workflow_result.terms
@@ -2281,6 +2301,7 @@ def run_protomer_screening(
             protomer,
             charge=charge,
             conformer_terms=[terms],
+            temperature_k=temperature_k,
         )
 
         gas_sp_energy_kcal_mol = (
@@ -2408,6 +2429,7 @@ def run_protomer_solvation(
     max_qm_conformers: int = REFINEMENT_MAX_QM_CONFORMERS,
     embedded_conformers: Optional[int] = None,
     conformer_energy_threshold_kcal_mol: float = DEFAULT_CONFORMER_ENERGY_THRESHOLD_KCAL_MOL,
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
     log_prefix: Optional[str] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> SolvationWorkflowResult:
@@ -2444,7 +2466,7 @@ def run_protomer_solvation(
         "START",
         f"conformer refinement protomer_id={protomer_id} scratch_dir={scratch_dir.name} "
         f"charge={charge} solvent_alpb={solvent.alpb} solvent_cpcm={solvent.cpcm} "
-        f"gxtb_optimize={gxtb_optimize}",
+        f"gxtb_optimize={gxtb_optimize} temperature_k={temperature_k:g}",
     )
 
     conformer_energy_kcal_mol: Optional[float] = None
@@ -2572,6 +2594,7 @@ def run_protomer_solvation(
                 gxtb_optimize=gxtb_optimize,
                 dry_run=dry_run,
                 log_paths=log_paths,
+                temperature_k=temperature_k,
                 progress_callback=_conf_progress,
             )
             _copy_warning_flags_from_conformer(protomer, conf_protomer)
@@ -2641,6 +2664,7 @@ def run_protomer_solvation(
             charge=charge,
             conformer_terms=conformer_terms,
             conformer_labels=conformer_labels,
+            temperature_k=temperature_k,
         )
         _set_mol_prop_str(protomer.mol, "workflow_status", "conformer_refined")
 

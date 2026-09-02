@@ -6,6 +6,9 @@ from typing import Optional
 HARTREE_TO_KCAL_MOL = 627.5094740631
 EV_TO_KCAL_MOL = 23.06054783061903
 
+# Default thermochemical / Boltzmann temperature (Kelvin).
+DEFAULT_TEMPERATURE_K = 298.15
+
 # xTB --opt convergence presets, loosest to tightest.
 OPT_CONVERGENCE_LEVELS: tuple[str, ...] = (
     "crude",

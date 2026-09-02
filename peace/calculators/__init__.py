@@ -1,5 +1,5 @@
 from .aimnet2 import run_aimnet2_optimization, run_aimnet2_single_point_energy
-from .common import EV_TO_KCAL_MOL, HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
+from .common import DEFAULT_TEMPERATURE_K, EV_TO_KCAL_MOL, HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
 from .xtb import (
     XtbFatalError,
     parse_xtb_rrho_contrib_hartree,
@@ -19,6 +19,7 @@ from .xtb2 import (
 )
 
 __all__ = [
+    "DEFAULT_TEMPERATURE_K",
     "HARTREE_TO_KCAL_MOL",
     "EV_TO_KCAL_MOL",
     "XtbFatalError",
