@@ -172,6 +172,12 @@ class SpeciesProtomerRegistry:
         if graph is None:
             return None
         for tautomer_id, protomer_id, canonical_protomer, canonical_graph in self._resonance_graphs:
+            # 2-pyridone (O=c1cccc[nH]1) and the hydroxy-pyridine zwitterion
+            # ([O-]c1cccc[nH+]1) share hydrogen placement once charges and bond
+            # orders are stripped. They are distinct microstates, not just
+            # alternate Lewis drawings of the same protomer.
+            if bool(canonical_protomer.is_zwitterion) != bool(protomer.is_zwitterion):
+                continue
             if _connectivity_graphs_are_isomorphic(graph, canonical_graph):
                 return tautomer_id, protomer_id, canonical_protomer
         return None
