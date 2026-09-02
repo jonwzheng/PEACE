@@ -235,13 +235,13 @@ def _build_cli_parser():
             "Number of KDG conformers to embed before quick pruning and MMFF94 relaxation. "
             "Must be greater than --max-conformers. "
             "If unset, uses the rotatable-bond heuristic "
-            "(max(20, min(3**n_rotatable_bonds, 500)))."
+            "(max(200, min(3**n_rotatable_bonds, 500)))."
         ),
     )
     p.add_argument(
         "--conformer-energy-threshold",
         type=float,
-        default=10.0,
+        default=25.0,
         help=(
             "MMFF94 energy window (kcal/mol above the lowest embedded conformer) for conformer sampling "
             "during refinement."
