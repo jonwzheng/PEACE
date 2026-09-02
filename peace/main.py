@@ -17,7 +17,6 @@ from datetime import datetime
 import time
 from pathlib import Path
 from typing import Any, Literal, Optional
-from rdkit import Chem
 from rdkit.Chem import AllChem
 import copy
 import pandas as pd
@@ -288,20 +287,21 @@ def _build_cli_parser():
         help=(
             "Skip RDKit tautomer enumeration and operate on the input structure as a "
             "single tautomer while still searching protomers with the selected "
-            "site-search mode."
+            "site-search mode. Structures from --add-tautomers are still included."
         ),
     )
     p.add_argument(
-        "--keep-tautomer-smiles",
+        "--add-tautomers",
         action="append",
         default=None,
         metavar="SMILES",
+        dest="add_tautomers",
         help=(
-            "If set, after tautomer enumeration keep only tautomers matching these "
-            "SMILES (repeatable). Matching ignores atom maps and stereo. Other "
-            "enumerated tautomers are dropped before protomer expansion and solvation. "
-            "Requested SMILES that were not enumerated are added so they can still "
-            "be evaluated."
+            "Add extra structures as tautomers of the input species (repeatable). "
+            "No chemical identity with the input is required: they are embedded as "
+            "additional tautomers and then follow the same protomer/solvation path. "
+            "With --only-protomer-search --site-search-mode none, the pool is only "
+            "the input SMILES plus these added structures."
         ),
     )
     p.add_argument(
@@ -351,76 +351,29 @@ def _make_species(
     return spec
 
 
-def _smiles_match_keyset(smiles: str) -> set[str]:
-    mol = Chem.MolFromSmiles(str(smiles))
-    if mol is None:
-        return set()
-    for atom in mol.GetAtoms():
-        atom.SetAtomMapNum(0)
-    return {
-        key
-        for key in (
-            Chem.MolToSmiles(mol, isomericSmiles=True),
-            Chem.MolToSmiles(mol, isomericSmiles=False),
-        )
-        if key
-    }
-
-
-def _tautomer_matches_keep(taut: Tautomer, wanted: set[str]) -> bool:
-    return any(
-        _smiles_match_keyset(protomer.smiles) & wanted
-        for protomer in taut.protomers.values()
-    )
-
-
-def _restrict_species_tautomers(spec: Species, keep_smiles: list[str]) -> None:
-    """Keep enumerated tautomers matching requested SMILES; add any that were missed."""
-    wanted: set[str] = set()
-    for smi in keep_smiles:
-        wanted |= _smiles_match_keyset(smi)
-    if not wanted:
-        raise ValueError("--keep-tautomer-smiles values could not be parsed as SMILES.")
-
-    n_before = len(spec.tautomers)
-    kept: dict[int, Tautomer] = {}
-    covered: set[str] = set()
-    for taut in spec.tautomers.values():
-        if not _tautomer_matches_keep(taut, wanted):
-            continue
-        kept[len(kept)] = taut
-        for protomer in taut.protomers.values():
-            covered |= _smiles_match_keyset(protomer.smiles)
-
-    spec.tautomers = kept
+def _add_species_tautomers(spec: Species, tautomer_smiles: list[str]) -> None:
+    """Embed extra SMILES as tautomers without requiring chemical identity."""
+    existing = set(spec.get_all_smiles())
     added = 0
-    for smi in keep_smiles:
-        keys = _smiles_match_keyset(smi)
-        if not keys or keys & covered:
+    for smi in tautomer_smiles:
+        mol = AllChem.MolFromSmiles(str(smi))
+        if mol is None:
+            raise ValueError(f"--add-tautomers value is not valid SMILES: {smi}")
+        taut = Tautomer.from_smiles(smi)
+        new_smiles = taut.protomers[0].smiles if taut.protomers else None
+        if not new_smiles:
+            raise ValueError(f"--add-tautomers value could not be embedded: {smi}")
+        if new_smiles in existing:
+            log(f"  --add-tautomers skipped (already present): {smi}")
             continue
-        if not spec.tautomers:
-            spec.tautomers = {0: Tautomer.from_smiles(smi)}
-            spec.key = AllChem.MolToInchiKey(spec.tautomers[0].protomers[0].mol)
-        else:
-            spec.embed_tautomers_from_list_of_smiles([smi])
+        spec.embed_tautomer(taut)
+        existing.add(new_smiles)
         added += 1
-        covered |= keys
-        log(f"  Added missing --keep-tautomer-smiles tautomer: {smi}")
-
-    if not spec.tautomers:
-        raise ValueError(
-            "No tautomers remained after --keep-tautomer-smiles filtering "
-            f"(had {n_before} enumerated tautomer(s))."
-        )
-
+        log(f"  Added tautomer from --add-tautomers: {new_smiles}")
     log(
-        "Restricted tautomer pool to --keep-tautomer-smiles: "
-        f"kept {len(kept)}/{n_before} enumerated, added {added} missing "
-        f"({len(spec.tautomers)} total)"
+        f"Added {added}/{len(tautomer_smiles)} tautomer(s) from --add-tautomers "
+        f"({len(spec.tautomers)} tautomer(s) total)"
     )
-    for taut_idx, taut in spec.tautomers.items():
-        smiles = taut.protomers[0].smiles if taut.protomers else "N/A"
-        log(f"  Kept tautomer {taut_idx + 1}/{len(spec.tautomers)}: {smiles}")
 
 
 def _shifted_smiles_for_tautomer(
@@ -953,11 +906,8 @@ if __name__ == "__main__":
     log(f"Temperature: {temperature_k:g} K")
     if args.only_protomer_search:
         log("Tautomer enumeration: disabled (--only-protomer-search)")
-    if args.keep_tautomer_smiles:
-        log(
-            "Tautomer restriction: keeping matches to "
-            f"{len(args.keep_tautomer_smiles)} --keep-tautomer-smiles structure(s)"
-        )
+    if args.add_tautomers:
+        log(f"Additional tautomers: {len(args.add_tautomers)} --add-tautomers structure(s)")
     if args.charge_seed_first_only:
         log("Charge seeding: first shift only (--charge-seed-first-only)")
     if args.max_seed_rounds is not None and args.max_seed_rounds < 0:
@@ -976,9 +926,9 @@ if __name__ == "__main__":
         engine=engine,
         only_protomer_search=args.only_protomer_search,
     )
-    if args.keep_tautomer_smiles:
+    if args.add_tautomers:
         try:
-            _restrict_species_tautomers(seed_spec, args.keep_tautomer_smiles)
+            _add_species_tautomers(seed_spec, args.add_tautomers)
         except ValueError as exc:
             parser.error(str(exc))
     seed_charge = AllChem.GetFormalCharge(seed_spec.tautomers[0].protomers[0].mol)
