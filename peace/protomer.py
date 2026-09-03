@@ -172,7 +172,7 @@ class SpeciesProtomerRegistry:
         if graph is None:
             return None
         for tautomer_id, protomer_id, canonical_protomer, canonical_graph in self._resonance_graphs:
-            # 2-pyridone (O=c1cccc[nH]1) and the hydroxy-pyridine zwitterion
+            # e.g. 2-pyridone (O=c1cccc[nH]1) and the hydroxy-pyridine zwitterion
             # ([O-]c1cccc[nH+]1) share hydrogen placement once charges and bond
             # orders are stripped. They are distinct microstates, not just
             # alternate Lewis drawings of the same protomer.
