@@ -232,6 +232,46 @@ def _is_connectivity_mismatch(mol: Chem.Mol | None) -> bool:
     return mol.GetProp("connectivity_mismatch").strip().lower() == "true"
 
 
+def _is_true_mol_prop(mol: Chem.Mol | None, key: str) -> bool:
+    if mol is None or not mol.HasProp(key):
+        return False
+    return mol.GetProp(key).strip().lower() in {"true", "1", "yes"}
+
+
+_UNRELIABLE_WORKFLOW_STATUSES = {
+    "post_xtb_screened_out",
+    "selected_but_postopt_failed",
+    "screening-failed",
+    "optimization-failed",
+    "conformer_generation_failed",
+    "connectivity-failed",
+    "partial-failed",
+    "not-run",
+}
+
+
+def _has_reliable_solution_energy(mol: Chem.Mol | None) -> bool:
+    """True when Gsoln came from a screened-in, successful solvation workflow.
+
+    Screened-out protomers and xTB/post-opt failures are backfilled with
+    placeholder energies; those must not enter pKa ensembles.
+    """
+    if mol is None or _optional_mol_float(mol, ENERGY_PROP) is None:
+        return False
+    if _is_true_mol_prop(mol, "screening_skipped_postopt"):
+        return False
+    if _is_true_mol_prop(mol, "screening_placeholder_from_failed_postopt"):
+        return False
+    if mol.HasProp("screening_placeholder_solution_phase_free_energy_kcal_mol"):
+        return False
+    if _is_connectivity_mismatch(mol):
+        return False
+    status = _optional_mol_str(mol, "workflow_status").lower()
+    if status in _UNRELIABLE_WORKFLOW_STATUSES:
+        return False
+    return True
+
+
 def _graph_mol(protomer) -> Any:
     if protomer.input_mol is not None:
         return protomer.input_mol
@@ -615,10 +655,12 @@ def _iter_energy_microstates(
 ):
     for taut_idx, tautomer in spec.tautomers.items():
         for prot_idx, protomer in tautomer.protomers.items():
-            energy = _optional_mol_float(protomer.mol, ENERGY_PROP)
-            if energy is None:
+            if not _has_reliable_solution_energy(protomer.mol):
                 continue
             if exclude_connectivity_mismatch and _is_connectivity_mismatch(protomer.mol):
+                continue
+            energy = _optional_mol_float(protomer.mol, ENERGY_PROP)
+            if energy is None:
                 continue
             smiles = canon_smiles(protomer.smiles) or protomer.smiles
             yield taut_idx, prot_idx, protomer, smiles, energy
@@ -632,7 +674,12 @@ def compute_pka_results(
     exclude_connectivity_mismatch: bool = False,
     solvent: str = "",
 ) -> pkaResult:
-    """Compute macro- and micro-pKa for every neighboring charge pair."""
+    """Compute macro- and micro-pKa for every neighboring charge pair.
+
+    Only protomers with reliable screened-in solution energies are used.
+    Placeholder energies from screening cutoffs or xTB/post-opt failures
+    are omitted.
+    """
     result = pkaResult(
         proton_energy=float(proton_energy),
         temperature_k=float(temperature_k),
