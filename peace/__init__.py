@@ -12,4 +12,5 @@ __all__ = [
     "common",
     "main",
     "solvation",
+    "pka",
 ]

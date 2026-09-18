@@ -332,7 +332,94 @@ def _build_cli_parser():
             "keeping the full per-tautomer shift pool."
         ),
     )
+    p.add_argument(
+        "--pka",
+        action="store_true",
+        help=(
+            "After solvation, predict microscopic and macroscopic pKa values from "
+            "solution-phase free energies. Requires --solvation and a charge range "
+            "with at least two neighboring states (e.g. 0 and 1)."
+        ),
+    )
+    p.add_argument(
+        "--proton-energy",
+        type=float,
+        default=None,
+        help=(
+            "Solution-phase G(H+) in kcal/mol for pKa = [G(A-) + G(H+) - G(AH)] / (RT ln 10). "
+            "Defaults to -265.9 kcal/mol for water. Required for solvents without a "
+            "tabulated default."
+        ),
+    )
+    p.add_argument(
+        "--pka-filter-type",
+        type=str,
+        default="count",
+        choices=["count", "threshold"],
+        help=(
+            "Visualization filter for micro-pKa reactions (mirrors --plot count/cutoff). "
+            "'count': up to N highest-population (f_AH * f_A-) single-proton reactions "
+            "per charge pair. "
+            "'threshold': all reactions whose DG_rxn is within this many kcal/mol of "
+            "the lowest DG in that charge pair, then sorted by population. CSV/stdout "
+            "still include every reaction."
+        ),
+    )
+    p.add_argument(
+        "--pka-filter-value",
+        type=float,
+        default=10.0,
+        help=(
+            "For --pka-filter-type=count: number of highest-population micro-pKa "
+            "reactions to draw (default: 10). For threshold: energy window in kcal/mol "
+            "(default: 10)."
+        ),
+    )
+    p.add_argument(
+        "--output-pka-csv",
+        type=str,
+        default=None,
+        help="Path for the pKa CSV (default: <output-csv stem>_pka.csv).",
+    )
+    p.add_argument(
+        "--output-pka-plots",
+        type=str,
+        default=None,
+        help=(
+            "Path for the labeled micro-pKa reaction image (default: <output-plots stem>_pka.png "
+            "if --output-plots is set, otherwise <output-csv stem>_pka.png)."
+        ),
+    )
     return p
+
+
+def _validate_cli_args(parser, args) -> None:
+    if int(args.charge_min) > int(args.charge_max):
+        parser.error("--charge-min must be <= --charge-max")
+    if float(args.temperature) <= 0:
+        parser.error("--temperature must be > 0 K")
+    if args.plot in ("cutoff", "count") and args.plot_filter is None:
+        parser.error(f"--plot-filter is required when --plot={args.plot}")
+    if args.plot_from_csv and args.no_plot:
+        parser.error("--plot-from-csv cannot be combined with --no-plot")
+    if args.pka and args.plot_from_csv:
+        parser.error("--pka cannot be combined with --plot-from-csv")
+    if args.pka and not args.solvation:
+        parser.error("--pka requires --solvation")
+    if args.pka and (int(args.charge_max) - int(args.charge_min) < 1):
+        parser.error(
+            "--pka requires a charge range with at least two neighboring charge states "
+            "(e.g. --charge-min 0 --charge-max 1)"
+        )
+    if args.pka:
+        from peace.pka import resolve_proton_energy
+        from peace.solvents import resolve_solvent
+
+        try:
+            solvent_name = resolve_solvent(args.solvent).alpb
+            resolve_proton_energy(args.proton_energy, solvent=solvent_name)
+        except ValueError as exc:
+            parser.error(str(exc))
 
 
 def _make_species(
@@ -834,14 +921,7 @@ if __name__ == "__main__":
     clear_user_warnings()
     set_log_level(args.log_level)
     set_crash_on_warning(bool(args.crash_on_warning))
-    if int(args.charge_min) > int(args.charge_max):
-        parser.error("--charge-min must be <= --charge-max")
-    if float(args.temperature) <= 0:
-        parser.error("--temperature must be > 0 K")
-    if args.plot in ("cutoff", "count") and args.plot_filter is None:
-        parser.error(f"--plot-filter is required when --plot={args.plot}")
-    if args.plot_from_csv and args.no_plot:
-        parser.error("--plot-from-csv cannot be combined with --no-plot")
+    _validate_cli_args(parser, args)
 
     temperature_k = float(args.temperature)
 
@@ -1292,6 +1372,46 @@ if __name__ == "__main__":
 
     print(df)
 
+    pka_result = None
+    if args.pka:
+        from peace.pka import (
+            compute_pka_results,
+            format_pka_report,
+            neighboring_charge_pairs,
+            pka_results_to_dataframe,
+            resolve_pka_csv_path,
+            resolve_proton_energy,
+        )
+
+        neighbor_pairs = neighboring_charge_pairs(requested_charges)
+        if not neighbor_pairs:
+            parser.error(
+                "--pka requires at least two neighboring enumerated charge states "
+                f"(found: {sorted(requested_charges) or 'none'}). "
+                "Widen --charge-min/--charge-max or check that charge seeding produced "
+                "adjacent states."
+            )
+        proton_energy = resolve_proton_energy(args.proton_energy, solvent=solvent.alpb)
+        log("Computing macroscopic and microscopic pKa values")
+        if args.proton_energy is None:
+            log(f"Default G(H+) for {solvent.alpb}: {proton_energy:g} kcal/mol")
+        else:
+            log(f"User-specified G(H+): {proton_energy:g} kcal/mol")
+        pka_result = compute_pka_results(
+            {charge: species_by_charge[charge] for charge in requested_charges},
+            temperature_k=temperature_k,
+            proton_energy=proton_energy,
+            exclude_connectivity_mismatch=bool(args.exclude_unconverged),
+            solvent=solvent.alpb,
+        )
+        pka_df = pka_results_to_dataframe(pka_result)
+        pka_csv_path = Path(resolve_pka_csv_path(args.output_csv, args.output_pka_csv))
+        pka_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        pka_df.to_csv(pka_csv_path, index=False)
+        log(f"Saved pKa CSV to: {pka_csv_path.resolve()}")
+        log(format_pka_report(pka_result))
+        print(pka_df)
+
     if not args.no_plot:
         for charge_state in requested_charges:
             spec = species_by_charge[charge_state]
@@ -1322,6 +1442,29 @@ if __name__ == "__main__":
                     log(f"Saved protomer plot to: {save_path.resolve()}")
             else:
                 log("No protomer images produced for this charge state.")
+
+    if args.pka and pka_result is not None:
+        from peace.pka import resolve_pka_plot_path
+
+        log(
+            "Rendering micro-pKa reaction plots "
+            f"(filter={args.pka_filter_type}, value={args.pka_filter_value:g})"
+        )
+        pka_imgs = visualization.plot_pka_results(
+            pka_result,
+            filter_type=args.pka_filter_type,
+            filter_value=args.pka_filter_value,
+        )
+        pka_plot_path = Path(
+            resolve_pka_plot_path(args.output_plots, args.output_pka_plots, args.output_csv)
+        )
+        if pka_imgs:
+            visualization.save_plot_images(pka_imgs, pka_plot_path)
+            log(f"Saved pKa reaction plot to: {pka_plot_path.resolve()}")
+            if not args.no_plot:
+                show_images(pka_imgs, mode="vertical")
+        else:
+            log("No pKa reaction images produced.")
 
     end_ts = time.time()
     log_user_warning_summary()
