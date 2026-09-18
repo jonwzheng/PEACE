@@ -804,7 +804,7 @@ def _pka_pair_banner(rec, width: int, n_shown: int, n_total: int) -> Image.Image
     font = _load_font(size=_FONT_SIZE_TITLE)
     font_small = _load_font(size=_FONT_SIZE)
     title = (
-        f"Macro-pKa  charge {rec.charge_acid:+d} ⇌ {rec.charge_base:+d}  ·  "
+        f"Macro-pKa  charge {rec.charge_acid:+d} <=> {rec.charge_base:+d}  ·  "
         f"pKa = {rec.pka:.3f}"
     )
     _draw_emphasis_text(draw, (10, 8), title, font=font, fill="#1a1a1a")
