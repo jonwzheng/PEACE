@@ -897,15 +897,34 @@ def compute_pka_results(
     result.micro.sort(
         key=lambda rec: (
             rec.charge_base,
-            rec.delta_g,
-            rec.pka,
-            rec.acid_smiles,
-            rec.base_smiles,
+            *_micro_pka_population_sort_key(rec),
         )
     )
     if not result.solvent:
         result.solvent = next((rec.solvent for rec in result.macro if rec.solvent), "")
     return result
+
+
+def _pair_population(rec: MicroPkaRecord) -> float:
+    """Boltzmann weight of a micro-pKa pair: f_AH * f_A- (missing side counts as 0)."""
+    acid_f = rec.acid_fraction
+    base_f = rec.base_fraction
+    if acid_f is None and base_f is None:
+        return float("-inf")
+    if acid_f is None:
+        return float(base_f)
+    if base_f is None:
+        return float(acid_f)
+    return float(acid_f) * float(base_f)
+
+
+def _micro_pka_population_sort_key(rec: MicroPkaRecord) -> tuple:
+    return (
+        -_pair_population(rec),
+        rec.pka,
+        rec.acid_smiles,
+        rec.base_smiles,
+    )
 
 
 def filter_micro_pka_records(
@@ -916,9 +935,10 @@ def filter_micro_pka_records(
 ) -> list[MicroPkaRecord]:
     """Filter micro-pKa reactions for visualization.
 
-    ``count`` keeps the N lowest-DG_rxn pairs (DG = G(A-) + G(H+) - G(AH)).
-    ``threshold`` keeps pairs whose DG_rxn is within ``filter_value`` kcal/mol
-    of the lowest DG_rxn in that neighboring-charge ensemble.
+    Ranking is by Boltzmann population f_AH * f_A- (highest first), so the
+    dominant tautomer contributions appear first. ``count`` keeps the N most
+    populated pairs. ``threshold`` still uses a DG_rxn window (kcal/mol from
+    the lowest DG in that charge pair), then sorts the kept pairs by f.
     """
     if filter_type not in ("count", "threshold"):
         raise ValueError(f"Unknown pKa filter type: {filter_type}")
@@ -931,26 +951,24 @@ def filter_micro_pka_records(
 
     kept: list[MicroPkaRecord] = []
     for _pair, group in grouped.items():
-        ranked = sorted(
-            group,
-            key=lambda rec: (rec.delta_g, rec.pka, rec.acid_smiles, rec.base_smiles),
-        )
         if filter_type == "count":
+            ranked = sorted(group, key=_micro_pka_population_sort_key)
             n_keep = 10 if filter_value is None else int(filter_value)
             if n_keep <= 0:
                 continue
             kept.extend(ranked[:n_keep])
             continue
+        ranked_by_dg = sorted(
+            group,
+            key=lambda rec: (rec.delta_g, rec.pka, rec.acid_smiles, rec.base_smiles),
+        )
         cutoff = float(filter_value) if filter_value is not None else 10.0
-        min_delta = ranked[0].delta_g
-        kept.extend(rec for rec in ranked if rec.delta_g - min_delta <= cutoff)
+        min_delta = ranked_by_dg[0].delta_g
+        kept.extend(rec for rec in ranked_by_dg if rec.delta_g - min_delta <= cutoff)
     kept.sort(
         key=lambda rec: (
             rec.charge_base,
-            rec.delta_g,
-            rec.pka,
-            rec.acid_smiles,
-            rec.base_smiles,
+            *_micro_pka_population_sort_key(rec),
         )
     )
     return kept

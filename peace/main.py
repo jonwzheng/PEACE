@@ -357,10 +357,11 @@ def _build_cli_parser():
         choices=["count", "threshold"],
         help=(
             "Visualization filter for micro-pKa reactions (mirrors --plot count/cutoff). "
-            "'count': up to N lowest-energy single-proton reactions per charge pair. "
-            "'threshold': all reactions whose min(G_AH, G_A-) is within this many "
-            "kcal/mol of the lowest energy in that charge pair. CSV/stdout still "
-            "include every reaction."
+            "'count': up to N highest-population (f_AH * f_A-) single-proton reactions "
+            "per charge pair. "
+            "'threshold': all reactions whose DG_rxn is within this many kcal/mol of "
+            "the lowest DG in that charge pair, then sorted by population. CSV/stdout "
+            "still include every reaction."
         ),
     )
     p.add_argument(
@@ -368,8 +369,9 @@ def _build_cli_parser():
         type=float,
         default=10.0,
         help=(
-            "For --pka-filter-type=count: number of lowest-energy micro-pKa reactions "
-            "to draw (default: 10). For threshold: energy window in kcal/mol (default: 10)."
+            "For --pka-filter-type=count: number of highest-population micro-pKa "
+            "reactions to draw (default: 10). For threshold: energy window in kcal/mol "
+            "(default: 10)."
         ),
     )
     p.add_argument(
