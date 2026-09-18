@@ -146,7 +146,7 @@ def pka_from_free_energies(
     proton_energy: float = 0.0,
     temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> tuple[float, float]:
-    """Return (pKa, ΔG) for AH ⇌ A- + H+ with ΔG = G(A-) + G(H+) - G(AH)."""
+    """Return (pKa, DG) for AH ⇌ A- + H+ with DG = G(A-) + G(H+) - G(AH)."""
     delta_g = float(g_base) + float(proton_energy) - float(g_acid)
     return delta_g / rt_ln10(temperature_k), delta_g
 
@@ -430,7 +430,7 @@ def compute_pka_results(
             )
             log(
                 f"Macro-pKa charge {charge_acid:+d} ⇌ {charge_base:+d}: "
-                f"pKa={pka:.4f}  ΔG={delta_g:.4f} kcal/mol "
+                f"pKa={pka:.4f}  DG={delta_g:.4f} kcal/mol "
                 f"(n_AH={len(acid_energies)}, n_A-={len(base_energies)})"
             )
         else:
@@ -669,10 +669,10 @@ def format_pka_report(result: PkaResult) -> str:
         lines.append("  (none)")
     for rec in result.macro:
         lines.append(
-            f"  charge {rec.charge_acid:+d} ⇌ {rec.charge_base:+d}: "
+            f"  charge {rec.charge_acid:+d} <=> {rec.charge_base:+d}: "
             f"pKa={rec.pka:.4f}  "
             f"G(AH)={rec.g_acid:.4f}  G(A-)={rec.g_base:.4f}  "
-            f"ΔG={rec.delta_g:.4f} kcal/mol  "
+            f"DG={rec.delta_g:.4f} kcal/mol  "
             f"n={rec.n_acid_microstates}/{rec.n_base_microstates}"
         )
     lines.extend(["", "Microscopic pKa (single-proton tautomer pairs):"])
