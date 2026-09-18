@@ -34,6 +34,12 @@ from .protomer import Species
 GAS_CONSTANT_KCAL_MOL_K = 0.00198720425864083
 ENERGY_PROP = "solution_phase_free_energy_kcal_mol"
 
+# Solution-phase G(H+) in kcal/mol, keyed by alphanumeric-normalized solvent names.
+# Add entries as additional solvents are parameterized.
+DEFAULT_PROTON_SOLUTION_ENERGIES_KCAL_MOL: dict[str, float] = {
+    "water": -265.9,
+}
+
 PKA_CSV_COLUMNS = [
     "kind",
     "charge_acid",
@@ -153,6 +159,54 @@ class pkaResult:
     proton_energy: float = 0.0
     temperature_k: float = DEFAULT_TEMPERATURE_K
     solvent: str = ""
+
+
+def _normalize_solvent_key(name: str) -> str:
+    return "".join(ch for ch in str(name).strip().lower() if ch.isalnum())
+
+
+def default_proton_energy_for_solvent(solvent: str) -> Optional[float]:
+    """Return tabulated G(H+) for a solvent, or None if none is defined."""
+    key = _normalize_solvent_key(solvent)
+    if not key:
+        return None
+    if key in DEFAULT_PROTON_SOLUTION_ENERGIES_KCAL_MOL:
+        return float(DEFAULT_PROTON_SOLUTION_ENERGIES_KCAL_MOL[key])
+    try:
+        from .solvents import resolve_solvent
+
+        key = _normalize_solvent_key(resolve_solvent(solvent).alpb)
+    except (ValueError, FileNotFoundError):
+        return None
+    energy = DEFAULT_PROTON_SOLUTION_ENERGIES_KCAL_MOL.get(key)
+    return None if energy is None else float(energy)
+
+
+def resolve_proton_energy(
+    proton_energy: Optional[float] = None,
+    *,
+    solvent: str = "",
+) -> float:
+    """Return solution-phase G(H+) in kcal/mol.
+
+    An explicit ``proton_energy`` always wins. Otherwise a solvent default is
+    used when tabulated. Solvents without
+    a default require an explicit value.
+    """
+    if proton_energy is not None:
+        return float(proton_energy)
+    default = default_proton_energy_for_solvent(solvent)
+    if default is not None:
+        return default
+    tabulated = ", ".join(sorted(DEFAULT_PROTON_SOLUTION_ENERGIES_KCAL_MOL))
+    water_default = DEFAULT_PROTON_SOLUTION_ENERGIES_KCAL_MOL["water"]
+    solvent_label = str(solvent).strip() or "unspecified"
+    raise ValueError(
+        f"proton_energy is required for solvent {solvent_label!r} "
+        "(no default G(H+) is tabulated). "
+        "Pass proton_energy, or use a solvent with a default "
+        f"({tabulated}; water = {water_default:g} kcal/mol)."
+    )
 
 
 def rt_ln10(temperature_k: float) -> float:
@@ -670,7 +724,7 @@ def compute_pka_results(
     species_by_charge: dict[int, Species],
     *,
     temperature_k: float = DEFAULT_TEMPERATURE_K,
-    proton_energy: float = 0.0,
+    proton_energy: Optional[float] = None,
     exclude_connectivity_mismatch: bool = False,
     solvent: str = "",
 ) -> pkaResult:
@@ -678,8 +732,10 @@ def compute_pka_results(
 
     Only protomers with reliable screened-in solution energies are used.
     Placeholder energies from screening cutoffs or xTB/post-opt failures
-    are omitted.
+    are omitted. ``proton_energy`` defaults to the tabulated G(H+) for
+    ``solvent`` when one exists.
     """
+    proton_energy = resolve_proton_energy(proton_energy, solvent=solvent)
     result = pkaResult(
         proton_energy=float(proton_energy),
         temperature_k=float(temperature_k),

@@ -344,10 +344,11 @@ def _build_cli_parser():
     p.add_argument(
         "--proton-energy",
         type=float,
-        default=0.0,
+        default=None,
         help=(
-            "Empirical G(H+) in kcal/mol for pKa = [G(A-) + G(H+) - G(AH)] / (RT ln 10). "
-            "Left as a fitted parameter; default 0.0."
+            "Solution-phase G(H+) in kcal/mol for pKa = [G(A-) + G(H+) - G(AH)] / (RT ln 10). "
+            "Defaults to -265.9 kcal/mol for water. Required for solvents without a "
+            "tabulated default."
         ),
     )
     p.add_argument(
@@ -410,6 +411,15 @@ def _validate_cli_args(parser, args) -> None:
             "--pka requires a charge range with at least two neighboring charge states "
             "(e.g. --charge-min 0 --charge-max 1)"
         )
+    if args.pka:
+        from peace.pka import resolve_proton_energy
+        from peace.solvents import resolve_solvent
+
+        try:
+            solvent_name = resolve_solvent(args.solvent).alpb
+            resolve_proton_energy(args.proton_energy, solvent=solvent_name)
+        except ValueError as exc:
+            parser.error(str(exc))
 
 
 def _make_species(
@@ -1370,6 +1380,7 @@ if __name__ == "__main__":
             neighboring_charge_pairs,
             pka_results_to_dataframe,
             resolve_pka_csv_path,
+            resolve_proton_energy,
         )
 
         neighbor_pairs = neighboring_charge_pairs(requested_charges)
@@ -1380,12 +1391,16 @@ if __name__ == "__main__":
                 "Widen --charge-min/--charge-max or check that charge seeding produced "
                 "adjacent states."
             )
+        proton_energy = resolve_proton_energy(args.proton_energy, solvent=solvent.alpb)
         log("Computing macroscopic and microscopic pKa values")
-        log(f"Empirical G(H+): {float(args.proton_energy):g} kcal/mol")
+        if args.proton_energy is None:
+            log(f"Default G(H+) for {solvent.alpb}: {proton_energy:g} kcal/mol")
+        else:
+            log(f"User-specified G(H+): {proton_energy:g} kcal/mol")
         pka_result = compute_pka_results(
             {charge: species_by_charge[charge] for charge in requested_charges},
             temperature_k=temperature_k,
-            proton_energy=float(args.proton_energy),
+            proton_energy=proton_energy,
             exclude_connectivity_mismatch=bool(args.exclude_unconverged),
             solvent=solvent.alpb,
         )

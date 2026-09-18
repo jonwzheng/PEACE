@@ -31,7 +31,12 @@ CLI commands can be displayed e.g. with:
 1. **Tautomer Enumeration** using RDKit.
 2. **Protomer Enumeration** by searching each tautomer for acid/base sites and sequentially (de)protonating all possible combinations (this searches for zwitterion forms).
 3. **(Optional) Microstate Population Estimation** using quantum-chemical calculations:
-   - **Screening**: KDG conformer → CPCM-X, g-xTB gas-phase SP, and RRHO on the screening geometry.
+   - **Screening**: KDG conformer -> CPCM-X, g-xTB gas-phase SP, and RRHO on the screening geometry.
    - **Refinement** (screened-in protomers): MMFF94-ranked conformer ensemble -> GFN2-xTB/ALPB optimization -> re-optimize at g-xTB gas phase.CPCM-X on GFN2-xTB/ALPB geometry; g-xTB SP and RRHO on the g-xTB geometry by default. Pass `--no-gxtb-optimize` to instead have all energy calculations done at the GFN2-xTB/ALPB geometry. 
    It is planned that a machine learning model will be made available to speed this up.
 4. **Visualization** of all relevant tautomer-protomers based on their graph representations. 
+
+## pKa Prediction
+The free energies of tautomers, and their ensembles, can be used to estimate pKa values. It is currently quite inaccurate and should be considered work in progress, or at least a way of estimating which micro-reactions contribute to acidity. Work is ongoing.
+
+You can call this with the `--pka` flag as well as `--proton-energy` to estimate the proton free energy in solution.
