@@ -792,6 +792,9 @@ def _pka_arrow_panel(width: int, height: int, rec) -> Image.Image:
     dg = f"ΔG = {rec.delta_g:.2f} kcal/mol"
     dg_w = draw.textlength(dg, font=font_small)
     draw.text((cx - dg_w / 2, mid_y + 26), dg, font=font_small, fill="#555555")
+    g_label = f"n/m={getattr(rec, 'n_fwd', 1)}/{getattr(rec, 'n_rev', 1)}"
+    gw = draw.textlength(g_label, font=font_small)
+    draw.text((cx - gw / 2, mid_y + 42), g_label, font=font_small, fill="#555555")
     return img
 
 
@@ -807,6 +810,7 @@ def _pka_pair_banner(rec, width: int, n_shown: int, n_total: int) -> Image.Image
     _draw_emphasis_text(draw, (10, 8), title, font=font, fill="#1a1a1a")
     subtitle = (
         f"G(AH)={rec.g_acid:.2f}  G(A-)={rec.g_base:.2f} kcal/mol  ·  "
+        f"Q=Σ g exp(-G/RT)  ·  "
         f"showing {n_shown}/{n_total} micro-pKa reaction(s)"
     )
     if rec.solvent:

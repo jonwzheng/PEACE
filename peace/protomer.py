@@ -14,8 +14,8 @@ from .calculators.common import DEFAULT_TEMPERATURE_K
 import copy
 import itertools
 import json
+import math
 import warnings
-
 import numpy as np
 import pandas as pd
 
@@ -608,6 +608,9 @@ class Species:
             DGi = Gi - Gref
             Q = sum_i exp(-DGi/RT)
             fi = exp(-DGi/RT) / Q
+
+        Duplicate-SMILES ``degeneracy`` is ignored (same microstate found twice).
+        Site-symmetry statistical factors belong on pKa transitions, not here.
 
         Energies are read from `energy_prop` on each protomer mol.
         The lowest-energy protomer across ALL tautomers is used as reference.

@@ -1,8 +1,9 @@
 """Microscopic and macroscopic pKa from PEACE solution-phase free energies.
 
-Macroscopic pKa uses the Boltzmann ensemble free energy of each neighboring
-charge state. Microscopic pKa pairs are the single-proton (de)protonations
-between those ensembles.
+Macroscopic pKa uses the degeneracy-weighted partition function of each
+neighboring charge state, Q = Σ g_i exp(-G_i/RT), with relative g taken from
+microscopic n_fwd/n_rev (g_A-/g_AH = n_fwd/n_rev). Microscopic pKa pairs are
+the single-proton (de)protonations between those ensembles.
 
 Pair enumeration is intentionally cheap: each microstate is reduced once to a
 cached heavy-atom skeleton key plus an H-count vector. Only microstates that
@@ -13,6 +14,7 @@ check (exactly one heavy atom gains/loses a single hydrogen).
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
@@ -45,6 +47,10 @@ PKA_CSV_COLUMNS = [
     "g_proton_kcal_mol",
     "delta_g_kcal_mol",
     "pka",
+    "pka_stat",
+    "n_fwd",
+    "n_rev",
+    "log10_n_over_m",
     "pair_energy_kcal_mol",
     "pair_rel_energy_kcal_mol",
     "acid_boltzmann_fraction",
@@ -79,6 +85,7 @@ class _AlignedMicrostate:
     h_counts: tuple[int, ...]
     atom_indices: tuple[int, ...]
     elements: tuple[str, ...]
+    ionizable: tuple[bool, ...]
     solvent: str
 
 
@@ -103,6 +110,10 @@ class MicroPkaRecord:
     pair_rel_energy: float
     acid_fraction: Optional[float]
     base_fraction: Optional[float]
+    n_fwd: int = 1
+    n_rev: int = 1
+    log10_n_over_m: float = 0.0
+    pka_stat: float = 0.0
     acid_mol: Any = None
     base_mol: Any = None
     solvent: str = ""
@@ -120,12 +131,15 @@ class MacroPkaRecord:
     pka: float
     n_acid_microstates: int
     n_base_microstates: int
+    n_fwd: int = 1
+    n_rev: int = 1
+    log10_n_over_m: float = 0.0
     solvent: str = ""
     temperature_k: float = DEFAULT_TEMPERATURE_K
 
 
 @dataclass
-class PkaResult:
+class pkaResult:
     micro: list[MicroPkaRecord] = field(default_factory=list)
     macro: list[MacroPkaRecord] = field(default_factory=list)
     proton_energy: float = 0.0
@@ -155,16 +169,31 @@ def ensemble_free_energy(
     energies: Iterable[float],
     *,
     temperature_k: float = DEFAULT_TEMPERATURE_K,
+    degeneracies: Iterable[float] | None = None,
 ) -> Optional[float]:
-    """Boltzmann-aggregated free energy: G = Gmin - RT ln Σ exp(-(Gi-Gmin)/RT)."""
+    """Boltzmann-aggregated free energy: G = Gmin - RT ln Σ g_i exp(-(Gi-Gmin)/RT)."""
     numeric = [float(e) for e in energies]
     if not numeric:
         return None
-    if len(numeric) == 1:
-        return numeric[0]
+    if degeneracies is None:
+        weights = [1.0] * len(numeric)
+    else:
+        weights = []
+        for value in degeneracies:
+            weight = float(value)
+            if not math.isfinite(weight) or weight <= 0.0:
+                weight = 1.0
+            weights.append(weight)
+        if len(weights) != len(numeric):
+            raise ValueError("degeneracies must match energies in length")
     rt = GAS_CONSTANT_KCAL_MOL_K * float(temperature_k)
     g_min = min(numeric)
-    log_sum = math.log(sum(math.exp(-(energy - g_min) / rt) for energy in numeric))
+    log_sum = math.log(
+        sum(
+            weight * math.exp(-(energy - g_min) / rt)
+            for energy, weight in zip(numeric, weights)
+        )
+    )
     return g_min - rt * log_sum
 
 
@@ -325,11 +354,180 @@ def _align_elements(values: tuple[str, ...], match: tuple[int, ...]) -> tuple[st
     return tuple(aligned)
 
 
+def _align_bools(values: tuple[bool, ...], match: tuple[int, ...]) -> tuple[bool, ...]:
+    aligned = [False] * len(match)
+    for ref_idx, skel_idx in enumerate(match):
+        aligned[ref_idx] = values[skel_idx]
+    return tuple(aligned)
+
+
+def find_symmetry_classes(mol: Chem.Mol | None) -> set[tuple[int, ...]]:
+    """Atom-index orbits under the molecular automorphism group.
+
+    Adapted from Greg Landrum (2011): un-uniquified self-substructure matches
+    are automorphisms; atoms that map onto each other are equivalent.
+    """
+    if mol is None or mol.GetNumAtoms() == 0:
+        return set()
+    equivs: dict[int, set[int]] = defaultdict(set)
+    try:
+        matches = mol.GetSubstructMatches(mol, uniquify=False)
+    except Exception:
+        return {tuple([idx]) for idx in range(mol.GetNumAtoms())}
+    if not matches:
+        return {tuple([idx]) for idx in range(mol.GetNumAtoms())}
+    for match in matches:
+        for idx1, idx2 in enumerate(match):
+            equivs[idx1].add(int(idx2))
+    return {tuple(sorted(group)) for group in equivs.values()}
+
+
+def _is_ionizable_heavy_atom(atom) -> bool:
+    """N/O/S that currently bears H or a formal charge."""
+    if atom.GetAtomicNum() not in (7, 8, 16):
+        return False
+    n_h = int(atom.GetTotalNumHs(includeNeighbors=True))
+    charge = int(atom.GetFormalCharge())
+    return n_h > 0 or charge != 0
+
+
+def _equivalent_site_count(mol: Chem.Mol | None, atom_idx: int, h_count: int) -> int:
+    """Count chemically equivalent (de)ionization sites on one Lewis structure.
+
+    Equivalence uses the molecule as drawn (bond orders and charges kept), so
+    COOH is not mixed with a geminal enol, and carboxylate O- is not mixed with
+    carbonyl O. Atoms must match element, hydrogen count, and formal charge.
+    """
+    if mol is None:
+        return 1
+    try:
+        atom = mol.GetAtomWithIdx(int(atom_idx))
+    except Exception:
+        return 1
+    atomic_num = atom.GetAtomicNum()
+    charge = int(atom.GetFormalCharge())
+    classes = find_symmetry_classes(mol)
+    cls = next((c for c in classes if int(atom_idx) in c), (int(atom_idx),))
+    n_eq = 0
+    for idx in cls:
+        try:
+            other = mol.GetAtomWithIdx(int(idx))
+        except Exception:
+            continue
+        if other.GetAtomicNum() != atomic_num:
+            continue
+        if int(other.GetFormalCharge()) != charge:
+            continue
+        if int(other.GetTotalNumHs(includeNeighbors=True)) != int(h_count):
+            continue
+        n_eq += 1
+    return max(1, n_eq)
+
+
+def _log10_n_over_m(n: float, m: float) -> float:
+    n_val = max(float(n), 1.0)
+    m_val = max(float(m), 1.0)
+    return math.log10(n_val / m_val)
+
+
+def _pair_site_counts(
+    acid: _AlignedMicrostate,
+    base: _AlignedMicrostate,
+    aligned_site_idx: int,
+) -> tuple[int, int]:
+    """n_fwd / n_rev for AH ⇌ A- + H+ from equivalent ionizable groups.
+
+    n_fwd: equivalent acidic sites on AH that deprotonate to this A-
+           (read from the more protonated Lewis structure).
+    n_rev: equivalent ionized sites on A- that protonate back to this AH.
+    """
+    if aligned_site_idx < 0 or aligned_site_idx >= len(acid.atom_indices):
+        return 1, 1
+    n_fwd = _equivalent_site_count(
+        acid.mol,
+        int(acid.atom_indices[aligned_site_idx]),
+        int(acid.h_counts[aligned_site_idx]),
+    )
+    n_rev = _equivalent_site_count(
+        base.mol,
+        int(base.atom_indices[aligned_site_idx]),
+        int(base.h_counts[aligned_site_idx]),
+    )
+    return n_fwd, n_rev
+
+
+def _propagate_transition_degeneracies(
+    acid_states: list[tuple],
+    base_states: list[tuple],
+    pair_micro: list[MicroPkaRecord],
+) -> tuple[list[float], list[float]]:
+    """Assign relative g from g_A-/g_AH = n_fwd/n_rev on the micro-pair graph.
+
+    Gauge: g = 1 on one node per connected component (acids first). Unpaired
+    unique structures keep g = 1. Absolute scale within a component cancels
+    in Q(A-)/Q(AH).
+    """
+    adj: dict[tuple[str, int, int], list[tuple[tuple[str, int, int], float]]] = defaultdict(list)
+
+    def add_edge(
+        src: tuple[str, int, int],
+        dst: tuple[str, int, int],
+        factor: float,
+    ) -> None:
+        if not math.isfinite(factor) or factor <= 0.0:
+            return
+        adj[src].append((dst, factor))
+        adj[dst].append((src, 1.0 / factor))
+
+    for rec in pair_micro:
+        acid_node = ("a", int(rec.acid_tautomer_id), int(rec.acid_protomer_id))
+        base_node = ("b", int(rec.base_tautomer_id), int(rec.base_protomer_id))
+        add_edge(acid_node, base_node, float(rec.n_fwd) / float(rec.n_rev))
+
+    degeneracy: dict[tuple[str, int, int], float] = {}
+
+    def seed_component(start: tuple[str, int, int]) -> None:
+        degeneracy[start] = 1.0
+        queue = [start]
+        while queue:
+            node = queue.pop(0)
+            for neighbor, factor in adj[node]:
+                predicted = degeneracy[node] * factor
+                if neighbor in degeneracy:
+                    current = degeneracy[neighbor]
+                    if current > 0.0 and predicted > 0.0:
+                        if abs(math.log(current / predicted)) > 1e-6:
+                            log(
+                                f"Inconsistent transition degeneracy for {neighbor}: "
+                                f"{current:g} vs {predicted:g}; keeping {current:g}",
+                                level=LogLevel.VERBOSE,
+                            )
+                    continue
+                degeneracy[neighbor] = predicted
+                queue.append(neighbor)
+
+    acid_nodes = [("a", int(row[0]), int(row[1])) for row in acid_states]
+    base_nodes = [("b", int(row[0]), int(row[1])) for row in base_states]
+    for node in acid_nodes + base_nodes:
+        if node not in degeneracy:
+            seed_component(node)
+
+    def weight_for(node: tuple[str, int, int]) -> float:
+        value = float(degeneracy.get(node, 1.0))
+        if not math.isfinite(value) or value <= 0.0:
+            return 1.0
+        return value
+
+    acid_weights = [weight_for(("a", int(row[0]), int(row[1]))) for row in acid_states]
+    base_weights = [weight_for(("b", int(row[0]), int(row[1]))) for row in base_states]
+    return acid_weights, base_weights
+
+
 def _single_hydrogen_site(
     acid: _AlignedMicrostate,
     base: _AlignedMicrostate,
-) -> tuple[int, str] | None:
-    """Return (original acid atom index, element) if H-counts differ at exactly one atom by +1."""
+) -> tuple[int, int, str] | None:
+    """Return (aligned_idx, original acid atom index, element) for a single-H pair."""
     if len(acid.h_counts) != len(base.h_counts):
         return None
     site_ref: Optional[int] = None
@@ -342,7 +540,7 @@ def _single_hydrogen_site(
         site_ref = idx
     if site_ref is None:
         return None
-    return acid.atom_indices[site_ref], acid.elements[site_ref]
+    return site_ref, acid.atom_indices[site_ref], acid.elements[site_ref]
 
 
 def _iter_energy_microstates(
@@ -368,9 +566,9 @@ def compute_pka_results(
     proton_energy: float = 0.0,
     exclude_connectivity_mismatch: bool = False,
     solvent: str = "",
-) -> PkaResult:
+) -> pkaResult:
     """Compute macro- and micro-pKa for every neighboring charge pair."""
-    result = PkaResult(
+    result = pkaResult(
         proton_energy=float(proton_energy),
         temperature_k=float(temperature_k),
         solvent=solvent,
@@ -398,47 +596,12 @@ def compute_pka_results(
         )
         acid_energies = [row[4] for row in acid_states]
         base_energies = [row[4] for row in base_states]
-        g_acid = ensemble_free_energy(acid_energies, temperature_k=temperature_k)
-        g_base = ensemble_free_energy(base_energies, temperature_k=temperature_k)
         pair_solvent = solvent
         if not pair_solvent:
             for _taut, _prot, protomer, _smi, _e in acid_states + base_states:
                 pair_solvent = _optional_mol_str(protomer.mol, "solvent")
                 if pair_solvent:
                     break
-        if g_acid is not None and g_base is not None:
-            pka, delta_g = pka_from_free_energies(
-                g_acid,
-                g_base,
-                proton_energy=proton_energy,
-                temperature_k=temperature_k,
-            )
-            result.macro.append(
-                MacroPkaRecord(
-                    charge_acid=charge_acid,
-                    charge_base=charge_base,
-                    g_acid=g_acid,
-                    g_base=g_base,
-                    proton_energy=float(proton_energy),
-                    delta_g=delta_g,
-                    pka=pka,
-                    n_acid_microstates=len(acid_energies),
-                    n_base_microstates=len(base_energies),
-                    solvent=pair_solvent,
-                    temperature_k=float(temperature_k),
-                )
-            )
-            log(
-                f"Macro-pKa charge {charge_acid:+d} <=> {charge_base:+d}: "
-                f"pKa={pka:.4f}  DG={delta_g:.4f} kcal/mol "
-                f"(n_AH={len(acid_energies)}, n_A-={len(base_energies)})"
-            )
-        else:
-            log(
-                f"Skipping macro-pKa for charge {charge_acid:+d} <=> {charge_base:+d}: "
-                "missing solution-phase free energies on one or both ensembles",
-                level=LogLevel.VERBOSE,
-            )
 
         grouped: dict[str, dict[str, list[_AlignedMicrostate]]] = {}
         ref_skeletons: dict[str, Chem.Mol] = {}
@@ -452,6 +615,10 @@ def compute_pka_results(
             match = _match_to_reference(features.skeleton, reference)
             if match is None:
                 return
+            ionizable = tuple(
+                _is_ionizable_heavy_atom(mol.GetAtomWithIdx(int(idx)))
+                for idx in features.atom_indices
+            )
             aligned = _AlignedMicrostate(
                 charge=charge,
                 tautomer_id=int(taut_idx),
@@ -463,6 +630,7 @@ def compute_pka_results(
                 h_counts=_align_counts(features.h_counts, match),
                 atom_indices=_align_counts(features.atom_indices, match),
                 elements=_align_elements(features.elements, match),
+                ionizable=_align_bools(ionizable, match),
                 solvent=_optional_mol_str(protomer.mol, "solvent") or pair_solvent,
             )
             bucket = grouped.setdefault(features.skeleton_key, {"acid": [], "base": []})
@@ -479,6 +647,7 @@ def compute_pka_results(
         all_pair_energies = acid_energies + base_energies
         g_ref = min(all_pair_energies) if all_pair_energies else 0.0
         n_compared = 0
+        pair_micro: list[MicroPkaRecord] = []
         for bucket in grouped.values():
             acids = bucket["acid"]
             bases = bucket["base"]
@@ -490,15 +659,17 @@ def compute_pka_results(
                     site = _single_hydrogen_site(acid, base)
                     if site is None:
                         continue
-                    site_idx, site_element = site
+                    aligned_site_idx, site_idx, site_element = site
+                    n_fwd, n_rev = _pair_site_counts(acid, base, aligned_site_idx)
                     pka, delta_g = pka_from_free_energies(
                         acid.energy,
                         base.energy,
                         proton_energy=proton_energy,
                         temperature_k=temperature_k,
                     )
+                    log_nm = _log10_n_over_m(n_fwd, n_rev)
                     pair_energy = min(acid.energy, base.energy)
-                    result.micro.append(
+                    pair_micro.append(
                         MicroPkaRecord(
                             charge_acid=charge_acid,
                             charge_base=charge_base,
@@ -515,16 +686,91 @@ def compute_pka_results(
                             proton_energy=float(proton_energy),
                             delta_g=delta_g,
                             pka=pka,
+                            pka_stat=pka - log_nm,
                             pair_energy=pair_energy,
                             pair_rel_energy=pair_energy - g_ref,
                             acid_fraction=acid.boltzmann_fraction,
                             base_fraction=base.boltzmann_fraction,
+                            n_fwd=n_fwd,
+                            n_rev=n_rev,
+                            log10_n_over_m=log_nm,
                             acid_mol=acid.mol,
                             base_mol=base.mol,
                             solvent=acid.solvent or base.solvent or pair_solvent,
                             temperature_k=float(temperature_k),
                         )
                     )
+        result.micro.extend(pair_micro)
+
+        acid_weights, base_weights = _propagate_transition_degeneracies(
+            acid_states, base_states, pair_micro
+        )
+        g_acid = ensemble_free_energy(
+            acid_energies,
+            temperature_k=temperature_k,
+            degeneracies=acid_weights,
+        )
+        g_base = ensemble_free_energy(
+            base_energies,
+            temperature_k=temperature_k,
+            degeneracies=base_weights,
+        )
+        g_acid_raw = ensemble_free_energy(acid_energies, temperature_k=temperature_k)
+        g_base_raw = ensemble_free_energy(base_energies, temperature_k=temperature_k)
+        n_fwd_macro, n_rev_macro = 1, 1
+        if pair_micro:
+            dominant = min(
+                pair_micro,
+                key=lambda rec: (rec.delta_g, rec.pka, rec.acid_smiles, rec.base_smiles),
+            )
+            n_fwd_macro, n_rev_macro = dominant.n_fwd, dominant.n_rev
+        if g_acid is not None and g_base is not None:
+            pka, delta_g = pka_from_free_energies(
+                g_acid,
+                g_base,
+                proton_energy=proton_energy,
+                temperature_k=temperature_k,
+            )
+            log_nm_macro = 0.0
+            if g_acid_raw is not None and g_base_raw is not None:
+                pka_raw, _delta_raw = pka_from_free_energies(
+                    g_acid_raw,
+                    g_base_raw,
+                    proton_energy=proton_energy,
+                    temperature_k=temperature_k,
+                )
+                log_nm_macro = pka_raw - pka
+            result.macro.append(
+                MacroPkaRecord(
+                    charge_acid=charge_acid,
+                    charge_base=charge_base,
+                    g_acid=g_acid,
+                    g_base=g_base,
+                    proton_energy=float(proton_energy),
+                    delta_g=delta_g,
+                    pka=pka,
+                    n_acid_microstates=len(acid_energies),
+                    n_base_microstates=len(base_energies),
+                    n_fwd=n_fwd_macro,
+                    n_rev=n_rev_macro,
+                    log10_n_over_m=log_nm_macro,
+                    solvent=pair_solvent,
+                    temperature_k=float(temperature_k),
+                )
+            )
+            log(
+                f"Macro-pKa charge {charge_acid:+d} <=> {charge_base:+d}: "
+                f"pKa={pka:.4f}  DG={delta_g:.4f} kcal/mol "
+                f"Q=Σ g exp(-G/RT) n_fwd={n_fwd_macro} n_rev={n_rev_macro} "
+                f"log10(n/m)={log_nm_macro:.4f} "
+                f"(n_AH={len(acid_energies)}, n_A-={len(base_energies)})"
+            )
+        else:
+            log(
+                f"Skipping macro-pKa for charge {charge_acid:+d} <=> {charge_base:+d}: "
+                "missing solution-phase free energies on one or both ensembles",
+                level=LogLevel.VERBOSE,
+            )
 
         log(
             f"Micro-pKa charge {charge_acid:+d} <=> {charge_base:+d}: "
@@ -537,7 +783,7 @@ def compute_pka_results(
     result.micro.sort(
         key=lambda rec: (
             rec.charge_base,
-            rec.pair_rel_energy,
+            rec.delta_g,
             rec.pka,
             rec.acid_smiles,
             rec.base_smiles,
@@ -556,9 +802,9 @@ def filter_micro_pka_records(
 ) -> list[MicroPkaRecord]:
     """Filter micro-pKa reactions for visualization.
 
-    ``count`` keeps the N lowest-energy pairs (by min(G_AH, G_A-)).
-    ``threshold`` keeps pairs whose min(G_AH, G_A-) is within ``filter_value``
-    kcal/mol of the lowest energy in that neighboring-charge ensemble.
+    ``count`` keeps the N lowest-ΔG_rxn pairs (ΔG = G(A-) + G(H+) - G(AH)).
+    ``threshold`` keeps pairs whose ΔG_rxn is within ``filter_value`` kcal/mol
+    of the lowest ΔG_rxn in that neighboring-charge ensemble.
     """
     if filter_type not in ("count", "threshold"):
         raise ValueError(f"Unknown pKa filter type: {filter_type}")
@@ -573,7 +819,7 @@ def filter_micro_pka_records(
     for _pair, group in grouped.items():
         ranked = sorted(
             group,
-            key=lambda rec: (rec.pair_rel_energy, rec.pka, rec.acid_smiles, rec.base_smiles),
+            key=lambda rec: (rec.delta_g, rec.pka, rec.acid_smiles, rec.base_smiles),
         )
         if filter_type == "count":
             n_keep = 10 if filter_value is None else int(filter_value)
@@ -582,11 +828,12 @@ def filter_micro_pka_records(
             kept.extend(ranked[:n_keep])
             continue
         cutoff = float(filter_value) if filter_value is not None else 10.0
-        kept.extend(rec for rec in ranked if rec.pair_rel_energy <= cutoff)
+        min_delta = ranked[0].delta_g
+        kept.extend(rec for rec in ranked if rec.delta_g - min_delta <= cutoff)
     kept.sort(
         key=lambda rec: (
             rec.charge_base,
-            rec.pair_rel_energy,
+            rec.delta_g,
             rec.pka,
             rec.acid_smiles,
             rec.base_smiles,
@@ -595,7 +842,7 @@ def filter_micro_pka_records(
     return kept
 
 
-def pka_results_to_dataframe(result: PkaResult) -> pd.DataFrame:
+def pka_results_to_dataframe(result: pkaResult) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for rec in result.macro:
         rows.append(
@@ -616,6 +863,10 @@ def pka_results_to_dataframe(result: PkaResult) -> pd.DataFrame:
                 "g_proton_kcal_mol": rec.proton_energy,
                 "delta_g_kcal_mol": rec.delta_g,
                 "pka": rec.pka,
+                "pka_stat": rec.pka,
+                "n_fwd": rec.n_fwd,
+                "n_rev": rec.n_rev,
+                "log10_n_over_m": rec.log10_n_over_m,
                 "pair_energy_kcal_mol": min(rec.g_acid, rec.g_base),
                 "pair_rel_energy_kcal_mol": "",
                 "acid_boltzmann_fraction": "",
@@ -643,6 +894,10 @@ def pka_results_to_dataframe(result: PkaResult) -> pd.DataFrame:
                 "g_proton_kcal_mol": rec.proton_energy,
                 "delta_g_kcal_mol": rec.delta_g,
                 "pka": rec.pka,
+                "pka_stat": rec.pka_stat,
+                "n_fwd": rec.n_fwd,
+                "n_rev": rec.n_rev,
+                "log10_n_over_m": rec.log10_n_over_m,
                 "pair_energy_kcal_mol": rec.pair_energy,
                 "pair_rel_energy_kcal_mol": rec.pair_rel_energy,
                 "acid_boltzmann_fraction": rec.acid_fraction,
@@ -656,14 +911,14 @@ def pka_results_to_dataframe(result: PkaResult) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=PKA_CSV_COLUMNS)
 
 
-def format_pka_report(result: PkaResult) -> str:
+def format_pka_report(result: pkaResult) -> str:
     lines = [
         "=== pKa predictions "
         f"(T={result.temperature_k:g} K, G(H+)={result.proton_energy:g} kcal/mol"
         + (f", solvent={result.solvent}" if result.solvent else "")
         + ") ===",
         "",
-        "Macroscopic pKa (Boltzmann ensemble free energies):",
+        "Macroscopic pKa (Q = Σ g exp(-G/RT) ensemble free energies):",
     ]
     if not result.macro:
         lines.append("  (none)")
@@ -673,6 +928,8 @@ def format_pka_report(result: PkaResult) -> str:
             f"pKa={rec.pka:.4f}  "
             f"G(AH)={rec.g_acid:.4f}  G(A-)={rec.g_base:.4f}  "
             f"DG={rec.delta_g:.4f} kcal/mol  "
+            f"n_fwd={rec.n_fwd} n_rev={rec.n_rev} "
+            f"log10(n/m)={rec.log10_n_over_m:.4f}  "
             f"n={rec.n_acid_microstates}/{rec.n_base_microstates}"
         )
     lines.extend(["", "Microscopic pKa (single-proton tautomer pairs):"])
@@ -686,7 +943,8 @@ def format_pka_report(result: PkaResult) -> str:
         )
         lines.append(
             f"  charge {rec.charge_acid:+d} <=> {rec.charge_base:+d}  "
-            f"pKa={rec.pka:.4f}  site={site}  "
+            f"pKa={rec.pka:.4f}  pKa_stat={rec.pka_stat:.4f}  site={site}  "
+            f"n_fwd={rec.n_fwd} n_rev={rec.n_rev} log10(n/m)={rec.log10_n_over_m:.4f}  "
             f"AH={rec.acid_smiles} (taut {rec.acid_tautomer_id}, prot {rec.acid_protomer_id})  "
             f"A-={rec.base_smiles} (taut {rec.base_tautomer_id}, prot {rec.base_protomer_id})"
         )
