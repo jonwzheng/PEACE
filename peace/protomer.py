@@ -98,6 +98,210 @@ def _connectivity_graphs_are_isomorphic(left: Mol | None, right: Mol | None) -> 
     )
 
 
+def _zwitterion_character(mol: Mol | None) -> tuple[int, int, int]:
+    """
+    Score charge separation so lower is preferred.
+
+    Order is (zwitterion flag, sum of |formal charge| on heavy atoms, charged
+    heavy-atom count). True tautomers still differ in hydrogen placement; this
+    only ranks alternate Lewis drawings of the same atom-bond graph.
+    """
+    if mol is None:
+        return (1, 10**9, 10**9)
+    abs_charge = 0
+    n_charged = 0
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() == 1:
+            continue
+        charge = atom.GetFormalCharge()
+        if charge == 0:
+            continue
+        abs_charge += abs(int(charge))
+        n_charged += 1
+    return (int(Protomer._is_zwitterion_mol(mol)), abs_charge, n_charged)
+
+
+def _sanitized_resonance_candidate(form: Mol) -> tuple[Mol | None, str | None]:
+    """Return a sanitizable mol and canonical SMILES for a resonance form, or None."""
+    try:
+        raw_smiles = Chem.MolToSmiles(form)
+    except (RuntimeError, ValueError):
+        return None, None
+    smiles = canon_smiles(raw_smiles) or raw_smiles
+    clean = Chem.MolFromSmiles(smiles)
+    if clean is None:
+        return None, None
+    ordered = canonicalize_atom_order(clean)
+    return (ordered if ordered is not None else clean), smiles
+
+
+def _select_minimal_zwitterion_resonance(mol: Mol) -> tuple[Mol, list[str]]:
+    """
+    Return the resonance form with the least zwitterion character.
+
+    RDKit resonance enumeration preserves hydrogen placement. Forms that cannot
+    be round-tripped to a sanitized mol are ignored. If the input is already a
+    min-character form it is kept; otherwise the lowest-character sanitized
+    form is chosen, with canonical SMILES as a tie-break.
+    """
+    original_graph = _explicit_h_neutral_connectivity_graph(mol)
+    original_smiles = canon_smiles(Chem.MolToSmiles(mol)) or Chem.MolToSmiles(mol)
+    best_mol = mol
+    best_character = _zwitterion_character(mol)
+    best_smiles = original_smiles
+    original_is_best = True
+
+    try:
+        enumerated = list(Chem.ResonanceMolSupplier(mol))
+    except Exception:
+        enumerated = []
+
+    for form in enumerated:
+        if form is None:
+            continue
+        clean, form_smiles = _sanitized_resonance_candidate(form)
+        if clean is None or form_smiles is None:
+            continue
+        form_graph = _explicit_h_neutral_connectivity_graph(clean)
+        if not _connectivity_graphs_are_isomorphic(original_graph, form_graph):
+            continue
+        form_character = _zwitterion_character(clean)
+        if form_character < best_character:
+            best_character = form_character
+            best_mol = clean
+            best_smiles = form_smiles
+            original_is_best = False
+        elif (
+            form_character == best_character
+            and not original_is_best
+            and form_smiles < best_smiles
+        ):
+            best_mol = clean
+            best_smiles = form_smiles
+
+    recorded: list[str] = []
+    if original_smiles != best_smiles and _zwitterion_character(mol) > best_character:
+        recorded.append(original_smiles)
+    return best_mol, recorded
+
+
+def _apply_minimal_zwitterion_resonance_to_protomer(protomer: "Protomer") -> bool:
+    """
+    Rewrite a protomer to its least charge-separated Lewis form.
+
+    Used after a protonation/deprotonation tautomer step during protomer
+    enumeration, not on ordinary embed/construction.
+    """
+    if protomer.mol is None:
+        return False
+    original_smiles = canon_smiles(protomer.smiles) or protomer.smiles
+    chosen_mol, worse_smiles = _select_minimal_zwitterion_resonance(protomer.mol)
+    chosen_smiles = canon_smiles(Chem.MolToSmiles(chosen_mol)) or Chem.MolToSmiles(chosen_mol)
+    if chosen_smiles == original_smiles:
+        return False
+    clean, clean_smiles = _sanitized_resonance_candidate(chosen_mol)
+    if clean is None:
+        return False
+    chosen_mol = clean
+    chosen_smiles = clean_smiles or chosen_smiles
+    degeneracy = None
+    if protomer.mol.HasProp("degeneracy"):
+        degeneracy = int(protomer.mol.GetProp("degeneracy"))
+    protomer.mol = chosen_mol
+    if degeneracy is not None:
+        protomer.mol.SetIntProp("degeneracy", degeneracy)
+    protomer.smiles = chosen_smiles
+    protomer.input_mol = copy.deepcopy(chosen_mol)
+    protomer.is_zwitterion = Protomer._is_zwitterion_mol(chosen_mol)
+    for smiles in worse_smiles:
+        protomer.resonance_charge_forms.setdefault(smiles, "original_lewis_form")
+    _sync_resonance_charge_forms_prop(protomer)
+    return True
+
+
+def _copy_lewis_structure(destination: "Protomer", source: "Protomer") -> None:
+    """Copy SMILES/mol/zwitterion state from source onto destination, keeping metadata."""
+    degeneracy = None
+    if destination.mol is not None and destination.mol.HasProp("degeneracy"):
+        degeneracy = int(destination.mol.GetProp("degeneracy"))
+    destination.smiles = source.smiles
+    destination.mol = source.mol
+    destination.input_mol = copy.deepcopy(source.mol) if source.mol is not None else None
+    destination.is_zwitterion = source.is_zwitterion
+    if destination.mol is not None and degeneracy is not None:
+        destination.mol.SetIntProp("degeneracy", degeneracy)
+    for smiles, label in source.resonance_charge_forms.items():
+        destination.resonance_charge_forms.setdefault(smiles, label)
+    _sync_resonance_charge_forms_prop(destination)
+
+
+class _SmilesOnlyProtomer:
+    """Minimal stand-in so discarded Lewis forms can be recorded by SMILES."""
+
+    def __init__(self, smiles: str):
+        self.smiles = smiles
+
+
+def _collapse_resonance_duplicate(
+    canonical_protomer: "Protomer",
+    candidate: "Protomer",
+    *,
+    skipped_tautomer_id: int | None,
+    skipped_protomer_id: int | None,
+    canonical_tautomer_id: int,
+    registry: "SpeciesProtomerRegistry | None" = None,
+    canonical_protomer_id: int | None = None,
+) -> tuple[int, bool]:
+    """
+    Merge two charge-stripped graph duplicates, keeping the less zwitterionic form.
+
+    Returns (degeneracy, replaced_canonical).
+    """
+    candidate_is_better = _zwitterion_character(candidate.mol) < _zwitterion_character(
+        canonical_protomer.mol
+    )
+    if candidate_is_better:
+        old_smiles = canon_smiles(canonical_protomer.smiles) or canonical_protomer.smiles
+        _log_duplicate_skip(
+            f"Replacing resonance-charge form {old_smiles} "
+            f"(tautomer {canonical_tautomer_id} protomer {canonical_protomer_id}) "
+            f"with lower-zwitterion form {candidate.smiles} "
+            f"from tautomer {skipped_tautomer_id}"
+        )
+        _copy_lewis_structure(canonical_protomer, candidate)
+        if registry is not None and canonical_protomer_id is not None and old_smiles:
+            registry.rekey_canonical(
+                old_smiles,
+                canonical_tautomer_id,
+                canonical_protomer_id,
+                canonical_protomer,
+            )
+        degeneracy = _record_resonance_charge_skip(
+            canonical_protomer,
+            _SmilesOnlyProtomer(old_smiles or ""),
+            skipped_tautomer_id=canonical_tautomer_id,
+            skipped_protomer_id=canonical_protomer_id,
+            canonical_tautomer_id=canonical_tautomer_id,
+        )
+        if (
+            skipped_tautomer_id is not None
+            and skipped_tautomer_id != canonical_tautomer_id
+            and skipped_tautomer_id not in canonical_protomer.alternate_tautomer_ids
+        ):
+            canonical_protomer.alternate_tautomer_ids.append(skipped_tautomer_id)
+            _sync_alternate_tautomer_ids_prop(canonical_protomer)
+        return degeneracy, True
+
+    degeneracy = _record_resonance_charge_skip(
+        canonical_protomer,
+        candidate,
+        skipped_tautomer_id=skipped_tautomer_id,
+        skipped_protomer_id=skipped_protomer_id,
+        canonical_tautomer_id=canonical_tautomer_id,
+    )
+    return degeneracy, False
+
+
 def _log_duplicate_skip(message: str) -> None:
     log(message, level=LogLevel.VERBOSE)
 
@@ -172,12 +376,10 @@ class SpeciesProtomerRegistry:
         if graph is None:
             return None
         for tautomer_id, protomer_id, canonical_protomer, canonical_graph in self._resonance_graphs:
-            # e.g. 2-pyridone (O=c1cccc[nH]1) and the hydroxy-pyridine zwitterion
-            # ([O-]c1cccc[nH+]1) share hydrogen placement once charges and bond
-            # orders are stripped. They are distinct microstates, not just
-            # alternate Lewis drawings of the same protomer.
-            if bool(canonical_protomer.is_zwitterion) != bool(protomer.is_zwitterion):
-                continue
+            # Same atom-bond graph (explicit H, charges and bond orders ignored)
+            # means alternate Lewis drawings of one protomer, including e.g.
+            # 2-pyridone vs [O-]c1cccc[nH+]1. Distinct tautomers still differ
+            # in hydrogen placement (Oc1ccccn1 vs O=c1cccc[nH]1).
             if _connectivity_graphs_are_isomorphic(graph, canonical_graph):
                 return tautomer_id, protomer_id, canonical_protomer
         return None
@@ -189,6 +391,20 @@ class SpeciesProtomerRegistry:
         graph = _explicit_h_neutral_connectivity_graph(protomer.mol)
         if graph is not None:
             self._resonance_graphs.append((tautomer_id, protomer_id, protomer, graph))
+
+    def rekey_canonical(
+        self,
+        old_smiles: str,
+        tautomer_id: int,
+        protomer_id: int,
+        protomer: Protomer,
+    ) -> None:
+        old_key = canon_smiles(old_smiles) or old_smiles
+        if old_key in self._canonical:
+            del self._canonical[old_key]
+        new_key = canon_smiles(protomer.smiles)
+        if new_key is not None:
+            self._canonical[new_key] = (tautomer_id, protomer_id, protomer)
 
     def seed_from_species(self, spec: "Species") -> int:
         """Register existing protomers and remove cross-tautomer duplicates."""
@@ -220,12 +436,14 @@ class SpeciesProtomerRegistry:
                 resonance_existing = self.resonance_for(protomer)
                 if resonance_existing is not None:
                     canon_taut_idx, canon_prot_idx, canon_protomer = resonance_existing
-                    degeneracy = _record_resonance_charge_skip(
+                    degeneracy, _replaced = _collapse_resonance_duplicate(
                         canon_protomer,
                         protomer,
                         skipped_tautomer_id=taut_idx,
                         skipped_protomer_id=prot_idx,
                         canonical_tautomer_id=canon_taut_idx,
+                        registry=self,
+                        canonical_protomer_id=canon_prot_idx,
                     )
                     _log_duplicate_skip(
                         f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
@@ -365,7 +583,8 @@ class Tautomer:
     ) -> list[Protomer]:
         """
         Enumerate protomers by applying one protonation/deprotonation pair to a
-        provided seed protomer.
+        provided seed protomer. Each product is rewritten to its least
+        charge-separated Lewis form before registration.
 
         Returns:
             List of newly embedded protomers.
@@ -402,6 +621,10 @@ class Tautomer:
             new_protomer.ionization_sites = list(
                 dict.fromkeys(idx_map.get(site, site) for site in touched_sites)
             )
+            # Prefer the least charge-separated Lewis drawing of this
+            # protonation/deprotonation product before it is registered.
+            if _apply_minimal_zwitterion_resonance_to_protomer(new_protomer):
+                new_protomer.ionization_sites = []
             if self.embed_protomer(
                 new_protomer,
                 species_registry=species_registry,
@@ -479,12 +702,14 @@ class Tautomer:
             if resonance_existing is not None:
                 canon_taut_idx, canon_prot_idx, canon_protomer = resonance_existing
                 skipped_tautomer_id = tautomer_id if tautomer_id is not None else None
-                degeneracy = _record_resonance_charge_skip(
+                degeneracy, _replaced = _collapse_resonance_duplicate(
                     canon_protomer,
                     protomer,
                     skipped_tautomer_id=skipped_tautomer_id,
                     skipped_protomer_id=idx,
                     canonical_tautomer_id=canon_taut_idx,
+                    registry=species_registry,
+                    canonical_protomer_id=canon_prot_idx,
                 )
                 species_registry.skipped_count += 1
                 species_registry.resonance_skipped_count += 1
@@ -514,6 +739,25 @@ class Tautomer:
                             f"{tautomer_id} (degeneracy={degeneracy})."
                         )
                     break
+            return False
+
+        graph = _explicit_h_neutral_connectivity_graph(protomer.mol)
+        for existing_protomer in self.protomers.values():
+            existing_graph = _explicit_h_neutral_connectivity_graph(existing_protomer.mol)
+            if not _connectivity_graphs_are_isomorphic(graph, existing_graph):
+                continue
+            skipped_tautomer_id = tautomer_id if tautomer_id is not None else None
+            degeneracy, _replaced = _collapse_resonance_duplicate(
+                existing_protomer,
+                protomer,
+                skipped_tautomer_id=skipped_tautomer_id,
+                skipped_protomer_id=idx,
+                canonical_tautomer_id=skipped_tautomer_id if skipped_tautomer_id is not None else -1,
+            )
+            _log_duplicate_skip(
+                f"Skipping resonance-charge duplicate protomer {protomer.smiles} "
+                f"within tautomer {skipped_tautomer_id} (degeneracy={degeneracy})."
+            )
             return False
 
         if protomer.mol is not None:
