@@ -146,7 +146,7 @@ def pka_from_free_energies(
     proton_energy: float = 0.0,
     temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> tuple[float, float]:
-    """Return (pKa, DG) for AH ⇌ A- + H+ with DG = G(A-) + G(H+) - G(AH)."""
+    """Return (pKa, DG) for AH <=> A- + H+ with DG = G(A-) + G(H+) - G(AH)."""
     delta_g = float(g_base) + float(proton_energy) - float(g_acid)
     return delta_g / rt_ln10(temperature_k), delta_g
 
@@ -429,13 +429,13 @@ def compute_pka_results(
                 )
             )
             log(
-                f"Macro-pKa charge {charge_acid:+d} ⇌ {charge_base:+d}: "
+                f"Macro-pKa charge {charge_acid:+d} <=> {charge_base:+d}: "
                 f"pKa={pka:.4f}  DG={delta_g:.4f} kcal/mol "
                 f"(n_AH={len(acid_energies)}, n_A-={len(base_energies)})"
             )
         else:
             log(
-                f"Skipping macro-pKa for charge {charge_acid:+d} ⇌ {charge_base:+d}: "
+                f"Skipping macro-pKa for charge {charge_acid:+d} <=> {charge_base:+d}: "
                 "missing solution-phase free energies on one or both ensembles",
                 level=LogLevel.VERBOSE,
             )
@@ -527,7 +527,7 @@ def compute_pka_results(
                     )
 
         log(
-            f"Micro-pKa charge {charge_acid:+d} ⇌ {charge_base:+d}: "
+            f"Micro-pKa charge {charge_acid:+d} <=> {charge_base:+d}: "
             f"{sum(1 for rec in result.micro if rec.charge_acid == charge_acid and rec.charge_base == charge_base)} "
             f"single-proton pair(s) "
             f"(skeleton groups={len(grouped)}, vector comparisons={n_compared})",
@@ -685,7 +685,7 @@ def format_pka_report(result: PkaResult) -> str:
             else "n/a"
         )
         lines.append(
-            f"  charge {rec.charge_acid:+d} ⇌ {rec.charge_base:+d}  "
+            f"  charge {rec.charge_acid:+d} <=> {rec.charge_base:+d}  "
             f"pKa={rec.pka:.4f}  site={site}  "
             f"AH={rec.acid_smiles} (taut {rec.acid_tautomer_id}, prot {rec.acid_protomer_id})  "
             f"A-={rec.base_smiles} (taut {rec.base_tautomer_id}, prot {rec.base_protomer_id})"
