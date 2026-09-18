@@ -497,7 +497,18 @@ def _mol_panel(mol, *, highlights: list[int]) -> Image.Image:
     kwargs: dict[str, Any] = {"size": _MOL_SIZE}
     if highlights:
         kwargs["highlightAtoms"] = highlights
-    img = Draw.MolToImage(mol, **kwargs)
+    try:
+        img = Draw.MolToImage(mol, **kwargs)
+    except RuntimeError:
+        panel = Image.new("RGB", _MOL_SIZE, "white")
+        draw = ImageDraw.Draw(panel)
+        font = _load_font(size=_FONT_SIZE)
+        text = "structure"
+        tw = draw.textlength(text, font=font)
+        draw.text(((_MOL_SIZE[0] - tw) / 2, (_MOL_SIZE[1] - 14) / 2), text, font=font, fill="#666666")
+        if highlights:
+            draw.rectangle([2, 2, _MOL_SIZE[0] - 3, _MOL_SIZE[1] - 3], outline="#0f4c3a", width=2)
+        return panel
     if img.mode != "RGB":
         img = img.convert("RGB")
     if img.size != _MOL_SIZE:
@@ -715,3 +726,200 @@ def plot_from_species(
     entries = entries_from_species(spec, formal_charge=formal_charge)
     filtered = filter_plot_entries(entries, mode=mode, plot_filter=plot_filter)
     return plot_entries(filtered, n_columns=n_columns)
+
+
+_PKA_ARROW_WIDTH = 168
+_PKA_CAPTION_HEIGHT = 72
+_PKA_ROW_GAP = 10
+_PKA_BANNER_HEIGHT = 56
+
+
+def _pka_mol_image(mol, smiles: str, highlights: list[int]) -> Image.Image:
+    draw_mol = mol
+    if draw_mol is None and smiles:
+        draw_mol = AllChem.MolFromSmiles(smiles)
+    return _mol_panel(draw_mol, highlights=highlights)
+
+
+def _pka_caption(
+    *,
+    width: int,
+    title: str,
+    smiles: str,
+    energy: float,
+    fraction: Optional[float],
+) -> Image.Image:
+    img = Image.new("RGB", (width, _PKA_CAPTION_HEIGHT), "white")
+    draw = ImageDraw.Draw(img)
+    font = _load_font(size=_FONT_SIZE)
+    font_small = _load_font(size=_FONT_SIZE_SMALL)
+    _draw_emphasis_text(draw, (4, 2), title, font=font, fill="#1a1a1a")
+    energy_text = f"G = {energy:.2f} kcal/mol"
+    if fraction is not None:
+        energy_text += f"   f = {_format_fraction_pct(fraction)}"
+    draw.text((4, 20), energy_text, font=font_small, fill="#333333")
+    smiles_lines = _wrap_smiles(smiles, width=max(20, (width - 8) // 7))
+    y = 36
+    for line in smiles_lines[:2]:
+        draw.text((4, y), line, font=font_small, fill="#555555")
+        y += 14
+    return img
+
+
+def _pka_arrow_panel(width: int, height: int, rec) -> Image.Image:
+    img = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(img)
+    font = _load_font(size=_FONT_SIZE_TITLE)
+    font_small = _load_font(size=_FONT_SIZE_SMALL)
+    cx = width / 2
+    mid_y = _MOL_SIZE[1] / 2 + _CELL_PAD
+    label = f"pKa = {rec.pka:.2f}"
+    tw = draw.textlength(label, font=font)
+    _draw_emphasis_text(draw, (cx - tw / 2, mid_y - 28), label, font=font, fill="#0f4c3a")
+    y_line = mid_y
+    draw.line([(12, y_line), (width - 18, y_line)], fill="#0f4c3a", width=3)
+    draw.polygon(
+        [(width - 8, y_line), (width - 22, y_line - 8), (width - 22, y_line + 8)],
+        fill="#0f4c3a",
+    )
+    site = (
+        f"site {rec.site_element}[{rec.site_atom_idx}]"
+        if rec.site_atom_idx is not None
+        else "site n/a"
+    )
+    site_w = draw.textlength(site, font=font_small)
+    draw.text((cx - site_w / 2, mid_y + 10), site, font=font_small, fill="#555555")
+    dg = f"ΔG = {rec.delta_g:.2f} kcal/mol"
+    dg_w = draw.textlength(dg, font=font_small)
+    draw.text((cx - dg_w / 2, mid_y + 26), dg, font=font_small, fill="#555555")
+    return img
+
+
+def _pka_pair_banner(rec, width: int, n_shown: int, n_total: int) -> Image.Image:
+    img = Image.new("RGB", (width, _PKA_BANNER_HEIGHT), "#eef4f1")
+    draw = ImageDraw.Draw(img)
+    font = _load_font(size=_FONT_SIZE_TITLE)
+    font_small = _load_font(size=_FONT_SIZE)
+    title = (
+        f"Macro-pKa  charge {rec.charge_acid:+d} ⇌ {rec.charge_base:+d}  ·  "
+        f"pKa = {rec.pka:.3f}"
+    )
+    _draw_emphasis_text(draw, (10, 8), title, font=font, fill="#1a1a1a")
+    subtitle = (
+        f"G(AH)={rec.g_acid:.2f}  G(A-)={rec.g_base:.2f} kcal/mol  ·  "
+        f"showing {n_shown}/{n_total} micro-pKa reaction(s)"
+    )
+    if rec.solvent:
+        subtitle += f"  ·  {rec.solvent}"
+    draw.text((10, 30), subtitle, font=font_small, fill="#444444")
+    draw.line([(0, _PKA_BANNER_HEIGHT - 1), (width, _PKA_BANNER_HEIGHT - 1)], fill="#c5d4cc", width=1)
+    return img
+
+
+def _compose_pka_reaction_row(rec) -> Image.Image:
+    acid_highlights = [rec.site_atom_idx] if rec.site_atom_idx is not None else []
+    acid_img = _pka_mol_image(rec.acid_mol, rec.acid_smiles, acid_highlights)
+    base_img = _pka_mol_image(rec.base_mol, rec.base_smiles, [])
+    cell_w = _MOL_SIZE[0] + 2 * _CELL_PAD
+    mol_h = _MOL_SIZE[1]
+    caption_acid = _pka_caption(
+        width=cell_w,
+        title=f"AH  taut {rec.acid_tautomer_id}  prot {rec.acid_protomer_id}  q={rec.charge_acid:+d}",
+        smiles=rec.acid_smiles,
+        energy=rec.g_acid,
+        fraction=rec.acid_fraction,
+    )
+    caption_base = _pka_caption(
+        width=cell_w,
+        title=f"A−  taut {rec.base_tautomer_id}  prot {rec.base_protomer_id}  q={rec.charge_base:+d}",
+        smiles=rec.base_smiles,
+        energy=rec.g_base,
+        fraction=rec.base_fraction,
+    )
+    row_h = _CELL_PAD + mol_h + _PKA_CAPTION_HEIGHT + _CELL_PAD
+    arrow = _pka_arrow_panel(_PKA_ARROW_WIDTH, row_h, rec)
+    row_w = cell_w + _PKA_ARROW_WIDTH + cell_w
+    row = Image.new("RGB", (row_w, row_h), "white")
+    row.paste(acid_img, (_CELL_PAD, _CELL_PAD))
+    row.paste(caption_acid, (0, _CELL_PAD + mol_h))
+    row.paste(arrow, (cell_w, 0))
+    row.paste(base_img, (cell_w + _PKA_ARROW_WIDTH + _CELL_PAD, _CELL_PAD))
+    row.paste(caption_base, (cell_w + _PKA_ARROW_WIDTH, _CELL_PAD + mol_h))
+    return row
+
+
+def plot_pka_results(
+    result,
+    *,
+    filter_type: str = "count",
+    filter_value: Optional[float] = 10.0,
+) -> list[Any]:
+    """Render labeled micro-pKa reaction diagrams, grouped by neighboring charge pair."""
+    from .pka import filter_micro_pka_records
+
+    if not result.macro and not result.micro:
+        return []
+
+    filtered = filter_micro_pka_records(
+        result.micro,
+        filter_type=filter_type,
+        filter_value=filter_value,
+    )
+    imgs: list[Any] = []
+    pair_keys = []
+    seen = set()
+    for rec in result.macro:
+        key = (rec.charge_acid, rec.charge_base)
+        if key not in seen:
+            pair_keys.append(key)
+            seen.add(key)
+    for rec in result.micro:
+        key = (rec.charge_acid, rec.charge_base)
+        if key not in seen:
+            pair_keys.append(key)
+            seen.add(key)
+
+    for charge_acid, charge_base in pair_keys:
+        pair_micro = [
+            rec
+            for rec in result.micro
+            if rec.charge_acid == charge_acid and rec.charge_base == charge_base
+        ]
+        shown = [
+            rec
+            for rec in filtered
+            if rec.charge_acid == charge_acid and rec.charge_base == charge_base
+        ]
+        rows = [_compose_pka_reaction_row(rec) for rec in shown]
+        row_w = rows[0].width if rows else (2 * (_MOL_SIZE[0] + 2 * _CELL_PAD) + _PKA_ARROW_WIDTH)
+        macro = next(
+            (
+                rec
+                for rec in result.macro
+                if rec.charge_acid == charge_acid and rec.charge_base == charge_base
+            ),
+            None,
+        )
+        total_h = _PKA_BANNER_HEIGHT if macro is not None else 0
+        if rows:
+            total_h += sum(row.height for row in rows) + _PKA_ROW_GAP * (len(rows) - 1)
+        elif macro is None:
+            continue
+        else:
+            total_h += 24
+        canvas = Image.new("RGB", (row_w, max(total_h, 1)), "white")
+        y = 0
+        if macro is not None:
+            canvas.paste(_pka_pair_banner(macro, row_w, len(shown), len(pair_micro)), (0, 0))
+            y = _PKA_BANNER_HEIGHT
+        if not rows and macro is not None:
+            draw = ImageDraw.Draw(canvas)
+            font = _load_font(size=_FONT_SIZE)
+            draw.text((10, y + 4), "No micro-pKa reactions matched the visualization filter.", font=font, fill="#666666")
+        for idx, row in enumerate(rows):
+            canvas.paste(row, (0, y))
+            y += row.height
+            if idx != len(rows) - 1:
+                y += _PKA_ROW_GAP
+        imgs.append(canvas)
+    return imgs
