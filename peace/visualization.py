@@ -789,7 +789,7 @@ def _pka_arrow_panel(width: int, height: int, rec) -> Image.Image:
     )
     site_w = draw.textlength(site, font=font_small)
     draw.text((cx - site_w / 2, mid_y + 10), site, font=font_small, fill="#555555")
-    dg = f"ΔG = {rec.delta_g:.2f} kcal/mol"
+    dg = f"DG = {rec.delta_g:.2f} kcal/mol"
     dg_w = draw.textlength(dg, font=font_small)
     draw.text((cx - dg_w / 2, mid_y + 26), dg, font=font_small, fill="#555555")
     g_label = f"n/m={getattr(rec, 'n_fwd', 1)}/{getattr(rec, 'n_rev', 1)}"
@@ -810,7 +810,6 @@ def _pka_pair_banner(rec, width: int, n_shown: int, n_total: int) -> Image.Image
     _draw_emphasis_text(draw, (10, 8), title, font=font, fill="#1a1a1a")
     subtitle = (
         f"G(AH)={rec.g_acid:.2f}  G(A-)={rec.g_base:.2f} kcal/mol  ·  "
-        f"Q=Σ g exp(-G/RT)  ·  "
         f"showing {n_shown}/{n_total} micro-pKa reaction(s)"
     )
     if rec.solvent:
@@ -835,7 +834,7 @@ def _compose_pka_reaction_row(rec) -> Image.Image:
     )
     caption_base = _pka_caption(
         width=cell_w,
-        title=f"A−  taut {rec.base_tautomer_id}  prot {rec.base_protomer_id}  q={rec.charge_base:+d}",
+        title=f"A-  taut {rec.base_tautomer_id}  prot {rec.base_protomer_id}  q={rec.charge_base:+d}",
         smiles=rec.base_smiles,
         energy=rec.g_base,
         fraction=rec.base_fraction,

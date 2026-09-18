@@ -5,10 +5,14 @@ neighboring charge state, Q = Σ g_i exp(-G_i/RT), with relative g taken from
 microscopic n_fwd/n_rev (g_A-/g_AH = n_fwd/n_rev). Microscopic pKa pairs are
 the single-proton (de)protonations between those ensembles.
 
-Pair enumeration is intentionally cheap: each microstate is reduced once to a
-cached heavy-atom skeleton key plus an H-count vector. Only microstates that
-share a skeleton are compared, and the comparison is an O(N_atoms) vector
-check (exactly one heavy atom gains/loses a single hydrogen).
+Pair enumeration is cheap but tautomer-preserving: each microstate is reduced
+once to a cached heavy-atom skeleton key plus H-count, charge, and aromaticity
+vectors. Only microstates that share a skeleton are compared. A pair is kept
+only if exactly one heavy atom loses a hydrogen **and** that atom's formal
+charge decreases by one, with all other atoms keeping the same charge and
+aromaticity and all bonds not incident to the site unchanged. That rejects
+keto ⇌ phenolate while keeping phenol ⇌ phenolate and carboxylic acid ⇌
+carboxylate.
 """
 
 from __future__ import annotations
@@ -70,6 +74,8 @@ class _SkeletonFeatures:
     h_counts: tuple[int, ...]
     atom_indices: tuple[int, ...]
     elements: tuple[str, ...]
+    charges: tuple[int, ...]
+    aromatic: tuple[bool, ...]
     n_hydrogen: int
 
 
@@ -85,6 +91,8 @@ class _AlignedMicrostate:
     h_counts: tuple[int, ...]
     atom_indices: tuple[int, ...]
     elements: tuple[str, ...]
+    charges: tuple[int, ...]
+    aromatic: tuple[bool, ...]
     ionizable: tuple[bool, ...]
     solvent: str
 
@@ -230,7 +238,7 @@ def _graph_mol(protomer) -> Any:
     return protomer.mol
 
 
-def _heavy_atom_records(mol: Chem.Mol) -> list[tuple[int, str, int]]:
+def _heavy_atom_records(mol: Chem.Mol) -> list[tuple[int, str, int, int, bool]]:
     records = []
     for atom in mol.GetAtoms():
         if atom.GetAtomicNum() == 1:
@@ -240,13 +248,15 @@ def _heavy_atom_records(mol: Chem.Mol) -> list[tuple[int, str, int]]:
                 int(atom.GetIdx()),
                 atom.GetSymbol(),
                 int(atom.GetTotalNumHs(includeNeighbors=True)),
+                int(atom.GetFormalCharge()),
+                bool(atom.GetIsAromatic()),
             )
         )
     return records
 
 
 def _total_hydrogen_count(mol: Chem.Mol) -> int:
-    return sum(n_h for _idx, _el, n_h in _heavy_atom_records(mol))
+    return sum(n_h for _idx, _el, n_h, _chg, _aro in _heavy_atom_records(mol))
 
 
 def _stripped_heavy_skeleton(mol: Chem.Mol) -> Chem.Mol | None:
@@ -313,9 +323,11 @@ def _skeleton_features(mol: Chem.Mol, smiles: str, cache: dict[str, _SkeletonFea
         smiles=smiles,
         skeleton_key=_skeleton_key(skeleton),
         skeleton=skeleton,
-        h_counts=tuple(n_h for _idx, _el, n_h in heavy),
-        atom_indices=tuple(idx for idx, _el, _n_h in heavy),
-        elements=tuple(el for _idx, el, _n_h in heavy),
+        h_counts=tuple(n_h for _idx, _el, n_h, _chg, _aro in heavy),
+        atom_indices=tuple(idx for idx, _el, _n_h, _chg, _aro in heavy),
+        elements=tuple(el for _idx, el, _n_h, _chg, _aro in heavy),
+        charges=tuple(chg for _idx, _el, _n_h, chg, _aro in heavy),
+        aromatic=tuple(aro for _idx, _el, _n_h, _chg, aro in heavy),
         n_hydrogen=_total_hydrogen_count(mol),
     )
     cache[smiles] = features
@@ -523,12 +535,54 @@ def _propagate_transition_degeneracies(
     return acid_weights, base_weights
 
 
+def _bond_signature(mol: Chem.Mol, idx_a: int, idx_b: int) -> tuple[bool, int] | None:
+    bond = mol.GetBondBetweenAtoms(int(idx_a), int(idx_b))
+    if bond is None:
+        return None
+    return bool(bond.GetIsAromatic()), int(bond.GetBondType())
+
+
+def _non_site_bonds_match(
+    acid: _AlignedMicrostate,
+    base: _AlignedMicrostate,
+    site_idx: int,
+) -> bool:
+    """Bonds not incident to the (de)protonation site must match (type + aromaticity)."""
+    n = len(acid.atom_indices)
+    if n != len(base.atom_indices):
+        return False
+    for i in range(n):
+        if i == site_idx:
+            continue
+        for j in range(i + 1, n):
+            if j == site_idx:
+                continue
+            acid_bond = _bond_signature(
+                acid.mol, int(acid.atom_indices[i]), int(acid.atom_indices[j])
+            )
+            base_bond = _bond_signature(
+                base.mol, int(base.atom_indices[i]), int(base.atom_indices[j])
+            )
+            if acid_bond != base_bond:
+                return False
+    return True
+
+
 def _single_hydrogen_site(
     acid: _AlignedMicrostate,
     base: _AlignedMicrostate,
 ) -> tuple[int, int, str] | None:
-    """Return (aligned_idx, original acid atom index, element) for a single-H pair."""
-    if len(acid.h_counts) != len(base.h_counts):
+    """Return (aligned_idx, original acid atom index, element) for a tautomer-preserving pair.
+
+    Requires a single heavy atom that loses one H and gains -1 formal charge, with
+    every other atom keeping the same H count, charge, and aromaticity.
+    """
+    n_atoms = len(acid.h_counts)
+    if n_atoms != len(base.h_counts):
+        return None
+    if n_atoms != len(acid.charges) or n_atoms != len(base.charges):
+        return None
+    if n_atoms != len(acid.aromatic) or n_atoms != len(base.aromatic):
         return None
     site_ref: Optional[int] = None
     for idx, (n_acid, n_base) in enumerate(zip(acid.h_counts, base.h_counts)):
@@ -539,6 +593,17 @@ def _single_hydrogen_site(
             return None
         site_ref = idx
     if site_ref is None:
+        return None
+    if int(acid.charges[site_ref]) != int(base.charges[site_ref]) + 1:
+        return None
+    for idx in range(n_atoms):
+        if idx == site_ref:
+            continue
+        if int(acid.charges[idx]) != int(base.charges[idx]):
+            return None
+        if bool(acid.aromatic[idx]) != bool(base.aromatic[idx]):
+            return None
+    if not _non_site_bonds_match(acid, base, site_ref):
         return None
     return site_ref, acid.atom_indices[site_ref], acid.elements[site_ref]
 
@@ -630,6 +695,8 @@ def compute_pka_results(
                 h_counts=_align_counts(features.h_counts, match),
                 atom_indices=_align_counts(features.atom_indices, match),
                 elements=_align_elements(features.elements, match),
+                charges=_align_counts(features.charges, match),
+                aromatic=_align_bools(features.aromatic, match),
                 ionizable=_align_bools(ionizable, match),
                 solvent=_optional_mol_str(protomer.mol, "solvent") or pair_solvent,
             )
@@ -802,9 +869,9 @@ def filter_micro_pka_records(
 ) -> list[MicroPkaRecord]:
     """Filter micro-pKa reactions for visualization.
 
-    ``count`` keeps the N lowest-ΔG_rxn pairs (ΔG = G(A-) + G(H+) - G(AH)).
-    ``threshold`` keeps pairs whose ΔG_rxn is within ``filter_value`` kcal/mol
-    of the lowest ΔG_rxn in that neighboring-charge ensemble.
+    ``count`` keeps the N lowest-DG_rxn pairs (DG = G(A-) + G(H+) - G(AH)).
+    ``threshold`` keeps pairs whose DG_rxn is within ``filter_value`` kcal/mol
+    of the lowest DG_rxn in that neighboring-charge ensemble.
     """
     if filter_type not in ("count", "threshold"):
         raise ValueError(f"Unknown pKa filter type: {filter_type}")
