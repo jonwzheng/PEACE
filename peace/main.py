@@ -338,7 +338,8 @@ def _build_cli_parser():
         help=(
             "After solvation, predict microscopic and macroscopic pKa values from "
             "solution-phase free energies. Requires --solvation and a charge range "
-            "with at least two neighboring states (e.g. 0 and 1)."
+            "with at least two neighboring states (e.g. 0 and 1). "
+            "CAUTION: Work is ongoing, and this feature may not be accurate for all systems."
         ),
     )
     p.add_argument(

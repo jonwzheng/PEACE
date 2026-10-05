@@ -5,13 +5,13 @@ neighboring charge state, Q = Σ g_i exp(-G_i/RT), with relative g taken from
 microscopic n_fwd/n_rev (g_A-/g_AH = n_fwd/n_rev). Microscopic pKa pairs are
 the single-proton (de)protonations between those ensembles.
 
-Pair enumeration is cheap but tautomer-preserving: each microstate is reduced
+Pair enumeration is cheap and tautomer-preserving: each microstate is reduced
 once to a cached heavy-atom skeleton key plus H-count, charge, and aromaticity
 vectors. Only microstates that share a skeleton are compared. A pair is kept
 only if exactly one heavy atom loses a hydrogen **and** that atom's formal
 charge decreases by one, with all other atoms keeping the same charge and
 aromaticity and all bonds not incident to the site unchanged. That rejects
-keto ⇌ phenolate while keeping phenol ⇌ phenolate and carboxylic acid ⇌
+keto <=> phenolate while keeping phenol <=> phenolate and carboxylic acid <=>
 carboxylate.
 """
 
