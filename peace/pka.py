@@ -37,7 +37,8 @@ ENERGY_PROP = "solution_phase_free_energy_kcal_mol"
 # Solution-phase G(H+) in kcal/mol, keyed by alphanumeric-normalized solvent names.
 # Add entries as additional solvents are parameterized.
 DEFAULT_PROTON_SOLUTION_ENERGIES_KCAL_MOL: dict[str, float] = {
-    "water": -265.9,
+    "water": -260.8, # -270.3 is the empirical value, from Gsoln(H+) = -6.3 kcal/mol (from Q) -264.0 kcal/mol (DGsolv), but empirical value of -260.8 gives much better results 
+
 }
 
 PKA_CSV_COLUMNS = [
