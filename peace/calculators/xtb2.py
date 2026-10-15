@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 from rdkit import Chem
 
-from .common import HARTREE_TO_KCAL_MOL
+from .common import DEFAULT_TEMPERATURE_K, HARTREE_TO_KCAL_MOL
 from .xtb import (
     build_fix_xcontrol,
     parse_xtb_rrho_contrib_hartree,
@@ -19,6 +19,7 @@ from .xtb import (
     parse_xtb_total_energy_hartree,
     run_cpcmx_single_point,
     run_hessian_and_parse_energies,
+    run_hessian_command_and_parse_energies,
     run_xtb_optimization,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "parse_xtb_solvent_free_energy_hartree",
     "parse_xtb_total_energy_hartree",
     "run_cpcmx_single_point",
+    "run_gxtb_hessian_and_parse_energies",
     "run_gxtb_optimization",
     "run_gxtb_single_point_energy",
     "run_hessian_and_parse_energies",
@@ -158,3 +160,37 @@ def run_gxtb_single_point_energy(
         log_status(log_paths, "WARN", "failed to parse gas-phase SP energy from g-xTB SP output")
 
     return gas_sp_energy_kcal_mol, gas_sp_energy_h
+
+
+def run_gxtb_hessian_and_parse_energies(
+    *,
+    scratch_dir: Path,
+    xyz_path: Path,
+    xtb_executable: str,
+    charge: int,
+    dry_run: bool,
+    log_paths: list[Path],
+    run_command: Callable[..., subprocess.CompletedProcess[str]],
+    log_status: Callable[[list[Path], str, str], None],
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Run a g-xTB Hessian (``--gxtb --hess``), then RRHO thermo at ``temperature_k``."""
+    cmd_hess = [
+        xtb_executable,
+        str(xyz_path.name),
+        "--gxtb",
+        "--hess",
+        "--chrg",
+        str(charge),
+    ]
+    return run_hessian_command_and_parse_energies(
+        cmd_hess=cmd_hess,
+        scratch_dir=scratch_dir,
+        xyz_path=xyz_path,
+        xtb_executable=xtb_executable,
+        dry_run=dry_run,
+        log_paths=log_paths,
+        run_command=run_command,
+        log_status=log_status,
+        temperature_k=temperature_k,
+    )
