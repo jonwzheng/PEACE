@@ -7,6 +7,7 @@ from .xtb import (
     parse_xtb_total_energy_hartree,
     report_xtb_fatal_and_exit,
     run_cpcmx_single_point,
+    run_gxtb_hessian_and_parse_energies,
     run_gxtb_optimization,
     run_gxtb_single_point_energy,
     run_hessian_and_parse_energies,
@@ -14,6 +15,7 @@ from .xtb import (
     run_xtb_optimization,
 )
 from .xtb2 import (
+    run_gxtb_hessian_and_parse_energies as run_gxtb2_hessian_and_parse_energies,
     run_gxtb_optimization as run_gxtb2_optimization,
     run_gxtb_single_point_energy as run_gxtb2_single_point_energy,
 )
@@ -32,6 +34,8 @@ __all__ = [
     "run_aimnet2_optimization",
     "run_aimnet2_single_point_energy",
     "run_cpcmx_single_point",
+    "run_gxtb_hessian_and_parse_energies",
+    "run_gxtb2_hessian_and_parse_energies",
     "run_gxtb_optimization",
     "run_gxtb2_optimization",
     "run_gxtb_single_point_energy",

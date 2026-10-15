@@ -603,7 +603,74 @@ def run_hessian_and_parse_energies(
     log_status: Callable[[list[Path], str, str], None],
     temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    """Run xTB Hessian, then recompute RRHO thermo at ``temperature_k``.
+    """Run a GFN-xTB Hessian, then recompute RRHO thermo at ``temperature_k``."""
+    cmd_hess = [
+        xtb_executable,
+        str(xyz_path.name),
+        "--hess",
+        "--chrg",
+        str(charge),
+        "--gfn",
+        str(gfn),
+    ]
+    return run_hessian_command_and_parse_energies(
+        cmd_hess=cmd_hess,
+        scratch_dir=scratch_dir,
+        xyz_path=xyz_path,
+        xtb_executable=xtb_executable,
+        dry_run=dry_run,
+        log_paths=log_paths,
+        run_command=run_command,
+        log_status=log_status,
+        temperature_k=temperature_k,
+    )
+
+
+def run_gxtb_hessian_and_parse_energies(
+    *,
+    scratch_dir: Path,
+    xyz_path: Path,
+    xtb_executable: str,
+    charge: int,
+    dry_run: bool,
+    log_paths: list[Path],
+    run_command: Callable[..., subprocess.CompletedProcess[str]],
+    log_status: Callable[[list[Path], str, str], None],
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Run a g-xTB Hessian via the legacy ``--driver`` interface, then RRHO thermo at ``temperature_k``."""
+    cmd_hess = (
+        f"{shlex.quote(xtb_executable)} {shlex.quote(xyz_path.name)} "
+        f"--hess "
+        f'--driver "gxtb -grad -c xtbdriver.xyz" '
+        f"--chrg {shlex.quote(str(charge))}"
+    )
+    return run_hessian_command_and_parse_energies(
+        cmd_hess=cmd_hess,
+        scratch_dir=scratch_dir,
+        xyz_path=xyz_path,
+        xtb_executable=xtb_executable,
+        dry_run=dry_run,
+        log_paths=log_paths,
+        run_command=run_command,
+        log_status=log_status,
+        temperature_k=temperature_k,
+    )
+
+
+def run_hessian_command_and_parse_energies(
+    *,
+    cmd_hess: list[str] | str,
+    scratch_dir: Path,
+    xyz_path: Path,
+    xtb_executable: str,
+    dry_run: bool,
+    log_paths: list[Path],
+    run_command: Callable[..., subprocess.CompletedProcess[str]],
+    log_status: Callable[[list[Path], str, str], None],
+    temperature_k: float = DEFAULT_TEMPERATURE_K,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Run an xTB Hessian command, then recompute RRHO thermo at ``temperature_k``.
 
     ``xtb --hess`` always evaluates thermochemistry at 298.15 K in current xTB
     builds (``--temp`` is not accepted on the main CLI). After a successful
@@ -614,16 +681,8 @@ def run_hessian_and_parse_energies(
     if temperature_k <= 0:
         raise ValueError(f"temperature_k must be > 0 K, got {temperature_k}")
 
-    cmd_hess = [
-        xtb_executable,
-        str(xyz_path.name),
-        "--hess",
-        "--chrg",
-        str(charge),
-        "--gfn",
-        str(gfn),
-    ]
-    log_status(log_paths, "STEP", f"running hessian: {' '.join(shlex.quote(x) for x in cmd_hess)}")
+    cmd_hess_str = cmd_hess if isinstance(cmd_hess, str) else " ".join(shlex.quote(x) for x in cmd_hess)
+    log_status(log_paths, "STEP", f"running hessian: {cmd_hess_str}")
     cp_hess = run_command(cmd_hess, cwd=scratch_dir, dry_run=dry_run)
     if not dry_run:
         frequency_log_path = scratch_dir / "xtbfreq_run.log"

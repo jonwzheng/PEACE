@@ -31,8 +31,8 @@ CLI commands can be displayed e.g. with:
 1. **Tautomer Enumeration** using RDKit.
 2. **Protomer Enumeration** by searching each tautomer for acid/base sites and sequentially (de)protonating all possible combinations (this searches for zwitterion forms).
 3. **(Optional) Microstate Population Estimation** using quantum-chemical calculations:
-   - **Screening**: KDG conformer -> CPCM-X, g-xTB gas-phase SP, and RRHO on the screening geometry.
-   - **Refinement** (screened-in protomers): MMFF94-ranked conformer ensemble -> GFN2-xTB/ALPB optimization -> re-optimize at g-xTB gas phase.CPCM-X on GFN2-xTB/ALPB geometry; g-xTB SP and RRHO on the g-xTB geometry by default. Pass `--no-gxtb-optimize` to instead have all energy calculations done at the GFN2-xTB/ALPB geometry. 
+   - **Screening**: KDG conformer -> CPCM-X, g-xTB gas-phase SP, and g-xTB RRHO (frequencies) on the screening geometry.
+   - **Refinement** (screened-in protomers): MMFF94-ranked conformer ensemble -> GFN2-xTB/ALPB optimization -> re-optimize at g-xTB gas phase.CPCM-X on GFN2-xTB/ALPB geometry; g-xTB SP and GFN2-xTB RRHO (frequencies) on the g-xTB geometry by default. Pass `--no-gxtb-optimize` to instead have all energy calculations done at the GFN2-xTB/ALPB geometry without gas-phase re-optimization. Pass `--frequency-calculator gxtb` to compute the RRHO contribution with g-xTB instead of GFN2-xTB frequencies (about 2x slower). 
    It is planned that a machine learning model will be made available to speed this up.
 4. **Visualization** of all relevant tautomer-protomers based on their graph representations. 
 

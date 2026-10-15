@@ -157,6 +157,17 @@ def _build_cli_parser():
         help="Gas-phase SP source: 'gxtb', 'xtb', or 'aimnet2'.",
     )
     p.add_argument(
+        "--frequency-calculator",
+        type=str,
+        default="gfn2",
+        choices=["gfn2", "gxtb"],
+        help=(
+            "Method for the Hessian/frequency (RRHO) calculation: 'gxtb' (g-xTB) or "
+            "'gfn2' (GFN2-xTB). Only changes the RRHO contribution."
+            " gxtb for frequencies is slower, but may provide slightly more accurate free energy results."
+        ),
+    )
+    p.add_argument(
         "--no-gxtb-optimize",
         action="store_true",
         help=(
@@ -1180,6 +1191,7 @@ if __name__ == "__main__":
                     opt_level=args.opt_level,
                     xtb_version=args.xtb_version,
                     xtb_executable=args.xtb_executable,
+                    frequency_calculator=args.frequency_calculator,
                     solvent=solvent,
                     keep_scratch=bool(args.keep_scratch),
                     keep_logs=bool(args.keep_logs),
@@ -1245,6 +1257,7 @@ if __name__ == "__main__":
                     keep_logs=bool(args.keep_logs),
                     sp_energy=args.sp_energy,
                     gxtb_optimize=bool(not args.no_gxtb_optimize),
+                    frequency_calculator=args.frequency_calculator,
                     xtb_version=args.xtb_version,
                     xtb_executable=args.xtb_executable,
                     solvent=solvent,

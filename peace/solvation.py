@@ -8,6 +8,7 @@ import warnings
 from datetime import datetime
 
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Callable, Literal, Optional, Union
 
@@ -25,7 +26,9 @@ from .calculators import (
     run_aimnet2_optimization,
     run_aimnet2_single_point_energy,
     run_cpcmx_single_point,
+    run_gxtb_hessian_and_parse_energies,
     run_gxtb_single_point_energy,
+    run_gxtb2_hessian_and_parse_energies,
     run_gxtb2_optimization,
     run_gxtb2_single_point_energy,
     run_gxtb_optimization,
@@ -42,6 +45,7 @@ HARTREE_TO_KCAL_MOL = 627.5094740631
 KCAL_MOL_PER_K = 0.00198720425864083
 
 XtbVersion = Literal["legacy", "default"]
+FrequencyCalculator = Literal["gfn2", "gxtb"]
 ConformerMode = Literal["kdg", "external_xyz", "skip_search"]
 
 REFINEMENT_MIN_EMBED_CONFORMERS = 200
@@ -62,6 +66,18 @@ def _resolve_gxtb_optimization_runner(xtb_version: XtbVersion):
     if xtb_version == "default":
         return run_gxtb2_optimization
     return run_gxtb_optimization
+
+
+def _resolve_hessian_runner(frequency_calculator: FrequencyCalculator, xtb_version: XtbVersion):
+    if frequency_calculator == "gfn2":
+        return partial(run_hessian_and_parse_energies, gfn=2)
+    if xtb_version == "default":
+        return run_gxtb2_hessian_and_parse_energies
+    return run_gxtb_hessian_and_parse_energies
+
+
+def _frequency_calculator_label(frequency_calculator: FrequencyCalculator) -> str:
+    return "GFN2-xTB" if frequency_calculator == "gfn2" else "g-xTB"
 
 
 @dataclass
@@ -997,22 +1013,23 @@ def _try_hessian_with_fallback(
     fallback_xyz_path: Path,
     scratch_dir: Path,
     xtb_executable: str,
+    xtb_version: XtbVersion,
+    frequency_calculator: FrequencyCalculator,
     charge: int,
-    gfn: int,
     dry_run: bool,
     log_paths: list[Path],
     temperature_k: float = DEFAULT_TEMPERATURE_K,
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    run_hessian = _resolve_hessian_runner(frequency_calculator, xtb_version)
     if primary_xyz_path is not None:
         gxtb_hess_scratch = scratch_dir / "hess_gxtb"
         gxtb_hess_xyz = _prepare_scratch_xyz(gxtb_hess_scratch, primary_xyz_path, "input.xyz")
         try:
-            gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, gas_sp_energy_h = run_hessian_and_parse_energies(
+            gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, gas_sp_energy_h = run_hessian(
                 scratch_dir=gxtb_hess_scratch,
                 xyz_path=gxtb_hess_xyz,
                 xtb_executable=xtb_executable,
                 charge=charge,
-                gfn=gfn,
                 dry_run=dry_run,
                 log_paths=log_paths,
                 run_command=_run_xtb,
@@ -1039,12 +1056,11 @@ def _try_hessian_with_fallback(
 
     alpb_hess_scratch = scratch_dir / "hess_alpb"
     alpb_hess_xyz = _prepare_scratch_xyz(alpb_hess_scratch, fallback_xyz_path, "input.xyz")
-    return run_hessian_and_parse_energies(
+    return run_hessian(
         scratch_dir=alpb_hess_scratch,
         xyz_path=alpb_hess_xyz,
         xtb_executable=xtb_executable,
         charge=charge,
-        gfn=gfn,
         dry_run=dry_run,
         log_paths=log_paths,
         run_command=_run_xtb,
@@ -1575,7 +1591,7 @@ def promote_screening_xtb_terms_to_final(
     clear_gas_sp: bool = False,
 ) -> None:
     """
-    Copy xTB screening solvation, RRHO, and GFN2-xTB Hessian gas terms onto final mol props.
+    Copy xTB screening solvation, RRHO, and Hessian-run gas terms onto final mol props.
 
     g-xTB gas-phase SP (``screening_gas_sp_energy_kcal_mol``) is intentionally not
     promoted: final ``gas_sp_energy_kcal_mol`` is reserved for post-screen g-xTB.
@@ -1775,6 +1791,7 @@ def _run_screening_conformer_workflow(
     gfn: int,
     dry_run: bool,
     log_paths: list[Path],
+    frequency_calculator: FrequencyCalculator = "gxtb",
     temperature_k: float = DEFAULT_TEMPERATURE_K,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> ConformerWorkflowResult:
@@ -1782,7 +1799,8 @@ def _run_screening_conformer_workflow(
     Lightweight screening workflow on a KDG geometry.
 
     Skips GFN2-xTB/ALPB and g-xTB geometry optimizations; runs CPCM-X solvation,
-    g-xTB gas-phase single point, and xTB Hessian (RRHO) on the input conformer.
+    g-xTB gas-phase single point, and a ``frequency_calculator`` Hessian (RRHO)
+    on the input conformer.
     """
     def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
         emit_progress(progress_callback, message, level=level)
@@ -1853,16 +1871,17 @@ def _run_screening_conformer_workflow(
             )
 
             _progress(
-                f"computing RRHO contribution with xTB frequencies at seeded screening geometry "
-                f"(T={temperature_k:g} K)"
+                f"computing RRHO contribution with {_frequency_calculator_label(frequency_calculator)} "
+                f"frequencies at seeded screening geometry (T={temperature_k:g} K)"
             )
             gas_sp_energy_xtb_kcal_mol, rrho_contribution_kcal_mol, _ = _try_hessian_with_fallback(
                 primary_xyz_path=None,
                 fallback_xyz_path=screening_geom_path,
                 scratch_dir=scratch_dir,
                 xtb_executable=xtb_executable,
+                xtb_version=xtb_version,
+                frequency_calculator=frequency_calculator,
                 charge=charge,
-                gfn=gfn,
                 dry_run=dry_run,
                 log_paths=log_paths,
                 temperature_k=temperature_k,
@@ -1944,6 +1963,7 @@ def _run_single_conformer_workflow(
     opt_level: str,
     optimization_engine: Literal["xtb", "aimnet2"],
     gxtb_optimize: bool = False,
+    frequency_calculator: FrequencyCalculator = "gxtb",
     dry_run: bool,
     log_paths: list[Path],
     temperature_k: float = DEFAULT_TEMPERATURE_K,
@@ -1954,7 +1974,7 @@ def _run_single_conformer_workflow(
 
     Geometry usage:
     - CPCM-X solvation: GFN2-xTB/ALPB optimized geometry.
-    - g-xTB gas-phase SP and RRHO: GFN2-xTB/ALPB geometry by default; when
+    - g-xTB gas-phase SP and RRHO (``frequency_calculator`` Hessian): GFN2-xTB/ALPB geometry by default; when
       ``gxtb_optimize`` is enabled, g-xTB gas-phase re-optimization is run first
       and SP/frequencies use the g-xTB geometry when available.
     """
@@ -2107,8 +2127,8 @@ def _run_single_conformer_workflow(
 
             if gxtb_opt_xyz_path is not None:
                 _progress(
-                    f"computing RRHO contribution with xTB frequencies at g-xTB-optimized geometry "
-                    f"(T={temperature_k:g} K)"
+                    f"computing RRHO contribution with {_frequency_calculator_label(frequency_calculator)} "
+                    f"frequencies at g-xTB-optimized geometry (T={temperature_k:g} K)"
                 )
                 _log_status(
                     log_paths,
@@ -2117,8 +2137,8 @@ def _run_single_conformer_workflow(
                 )
             else:
                 _progress(
-                    f"computing RRHO contribution with xTB frequencies at GFN2-xTB/ALPB geometry "
-                    f"(T={temperature_k:g} K)"
+                    f"computing RRHO contribution with {_frequency_calculator_label(frequency_calculator)} "
+                    f"frequencies at GFN2-xTB/ALPB geometry (T={temperature_k:g} K)"
                 )
                 _log_status(
                     log_paths,
@@ -2130,8 +2150,9 @@ def _run_single_conformer_workflow(
                 fallback_xyz_path=solvation_xyz_path,
                 scratch_dir=scratch_dir,
                 xtb_executable=xtb_executable,
+                xtb_version=xtb_version,
+                frequency_calculator=frequency_calculator,
                 charge=charge,
-                gfn=gfn,
                 dry_run=dry_run,
                 log_paths=log_paths,
                 temperature_k=temperature_k,
@@ -2210,6 +2231,7 @@ def run_protomer_screening(
     charge_override: Optional[int] = None,
     solvent: SolventNames | None = None,
     gfn: int = 2,
+    frequency_calculator: FrequencyCalculator = "gxtb",
     optimization_engine: Literal["xtb", "aimnet2"] = "xtb",
     opt_level: str = "loose",
     keep_scratch: bool = False,
@@ -2226,7 +2248,7 @@ def run_protomer_screening(
     1) Build/choose an initial KDG conformer geometry.
     2) Run CPCM-X solvation on the KDG geometry.
     3) Run g-xTB gas-phase single point on the KDG geometry.
-    4) Run xTB Hessian (RRHO) on the KDG geometry.
+    4) Run a ``frequency_calculator`` Hessian (RRHO) on the KDG geometry.
     5) Compute screening solution-phase free energy.
 
     GFN2-xTB/ALPB and g-xTB geometry optimizations are skipped during screening.
@@ -2291,6 +2313,7 @@ def run_protomer_screening(
             charge=charge,
             solvent=solvent,
             gfn=gfn,
+            frequency_calculator=frequency_calculator,
             dry_run=dry_run,
             log_paths=log_paths,
             temperature_k=temperature_k,
@@ -2421,6 +2444,7 @@ def run_protomer_solvation(
     opt_level: str = "loose",
     sp_energy: Literal["gxtb", "xtb", "aimnet2"] = "gxtb",
     gxtb_optimize: bool = False,
+    frequency_calculator: FrequencyCalculator = "gxtb",
     keep_scratch: bool = False,
     keep_logs: bool = False,
     keep_scratch_on_failure: bool = False,
@@ -2440,7 +2464,7 @@ def run_protomer_solvation(
     embedded geometries, MMFF94-relaxes the resulting candidate pool, then
     selects up to max_qm_conformers from the relaxed/reranked pool,
     runs GFN2-xTB/ALPB optimization, CPCM-X solvation on the ALPB geometry,
-    g-xTB gas-phase SP and RRHO on the ALPB geometry by default, optionally
+    g-xTB gas-phase SP and RRHO (``frequency_calculator`` Hessian) on the ALPB geometry by default, optionally
     g-xTB gas-phase re-optimization first when ``gxtb_optimize`` is enabled,
     prunes optimized structures again (keeping the lowest-energy
     instance of each duplicate), and Boltzmann-weights the surviving conformer
@@ -2592,6 +2616,7 @@ def run_protomer_solvation(
                 opt_level=opt_level,
                 optimization_engine=optimization_engine,
                 gxtb_optimize=gxtb_optimize,
+                frequency_calculator=frequency_calculator,
                 dry_run=dry_run,
                 log_paths=log_paths,
                 temperature_k=temperature_k,
