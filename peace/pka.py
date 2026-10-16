@@ -294,6 +294,7 @@ def _is_true_mol_prop(mol: Chem.Mol | None, key: str) -> bool:
 
 
 _UNRELIABLE_WORKFLOW_STATUSES = {
+    "screened_out",
     "post_xtb_screened_out",
     "selected_but_postopt_failed",
     "screening-failed",

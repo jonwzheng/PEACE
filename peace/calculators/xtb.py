@@ -274,12 +274,14 @@ def run_xtb_optimization(
     xtb_executable: str,
     opt_level: str,
     charge: int,
-    solvent: str,
+    solvent: Optional[str],
     dry_run: bool,
     log_paths: list[Path],
     run_command: Callable[..., subprocess.CompletedProcess[str]],
     log_status: Callable[[list[Path], str, str], None],
+    gfn: int = 2,
 ) -> tuple[Path, Optional[float], Optional[float]]:
+    """Run a GFN-xTB optimization, with ALPB implicit solvent unless ``solvent`` is None."""
     xtbopt_xyz_path = scratch_dir / "xtbopt.xyz"
     xcontrol_path = scratch_dir / "xcontrol.inp"
     n_constraints = build_fix_xcontrol(
@@ -300,11 +302,12 @@ def run_xtb_optimization(
     else:
         log_status(log_paths, "OK", "no positively charged heavy-atom X-H constraints generated")
 
+    solvent_flag = f"--alpb {shlex.quote(solvent)} " if solvent is not None else ""
     cmd_opt = (
         f"{shlex.quote(xtb_executable)} {shlex.quote(input_xyz_path.name)} "
         f"{input_flag} "
-        f"--opt {shlex.quote(opt_level)} --alpb {shlex.quote(solvent)} "
-        f"--chrg {shlex.quote(str(charge))}"
+        f"--opt {shlex.quote(opt_level)} {solvent_flag}"
+        f"--gfn {shlex.quote(str(gfn))} --chrg {shlex.quote(str(charge))}"
     )
     log_status(log_paths, "STEP", f"running optimization: {cmd_opt}")
     cp_opt = run_command(cmd_opt, cwd=scratch_dir, dry_run=dry_run)
@@ -349,6 +352,30 @@ def run_xtb_optimization(
     return xtbopt_xyz_path, gas_sp_energy_kcal_mol, gas_sp_energy_h
 
 
+def zwitterion_xh_constraints(
+    mol: Chem.Mol,
+    *,
+    fixed_distance: float = 1.05,
+) -> list[tuple[int, int, float]]:
+    """
+    Return ``(heavy_idx, h_idx, distance)`` (0-based) for positively charged X-H sites.
+
+    Covers every heavy atom with formal charge +1 bonded to at least one hydrogen.
+    Bond distances are selected by heavy-atom element symbol where available;
+    otherwise ``fixed_distance`` is used.
+    """
+    mol_h = Chem.AddHs(Chem.Mol(mol), addCoords=True)
+    constraints: list[tuple[int, int, float]] = []
+    for atom in mol_h.GetAtoms():
+        if atom.GetAtomicNum() == 1 or atom.GetFormalCharge() != 1:
+            continue
+        h_neighbors = [nbr for nbr in atom.GetNeighbors() if nbr.GetAtomicNum() == 1]
+        distance = ZWITTERION_XH_DISTANCE_BY_SYMBOL.get(atom.GetSymbol(), fixed_distance)
+        for h_atom in h_neighbors:
+            constraints.append((atom.GetIdx(), h_atom.GetIdx(), distance))
+    return constraints
+
+
 def build_fix_xcontrol(
     mol: Chem.Mol,
     xcontrol_path: Path,
@@ -359,39 +386,19 @@ def build_fix_xcontrol(
     """
     Build xTB xcontrol constraints for positively charged zwitterionic X-H sites.
 
-    For each heavy atom with formal charge +1 that is bonded to at least one
-    hydrogen, write:
+    For each site from ``zwitterion_xh_constraints``, write:
       $constrain
        force constant=<force_constant>
        distance: X_idx, H_idx, <target_distance>
       $end
 
-    Bond distances are selected by heavy-atom element symbol where available.
-    If no element-specific entry exists, ``fixed_distance`` is used.
-
     Returns number of generated distance constraints.
     """
-    mol_h = Chem.AddHs(Chem.Mol(mol), addCoords=True)
-    constraints: list[str] = []
-
-    for atom in mol_h.GetAtoms():
-        if atom.GetAtomicNum() == 1:
-            continue
-        if atom.GetFormalCharge() != 1:
-            continue
-
-        h_neighbors = [nbr for nbr in atom.GetNeighbors() if nbr.GetAtomicNum() == 1]
-        if not h_neighbors:
-            continue
-
-        heavy_idx = atom.GetIdx() + 1  # xTB uses 1-based indexing.
-        constrained_distance = ZWITTERION_XH_DISTANCE_BY_SYMBOL.get(
-            atom.GetSymbol(),
-            fixed_distance,
-        )
-        for h_atom in h_neighbors:
-            h_idx = h_atom.GetIdx() + 1
-            constraints.append(f" distance: {heavy_idx},{h_idx},{constrained_distance:.2f}")
+    # xTB uses 1-based indexing.
+    constraints = [
+        f" distance: {heavy_idx + 1},{h_idx + 1},{distance:.2f}"
+        for heavy_idx, h_idx, distance in zwitterion_xh_constraints(mol, fixed_distance=fixed_distance)
+    ]
 
     if constraints:
         content = (
@@ -460,6 +467,60 @@ def run_cpcmx_single_point(
         f"parsed solvation_free_energy_kcal_mol={solvation_free_energy_kcal_mol}",
     )
     return solvation_free_energy_kcal_mol
+
+
+def run_xtb_single_point_energy(
+    *,
+    scratch_dir: Path,
+    xyz_path: Path,
+    xtb_executable: str,
+    charge: int,
+    gfn: int,
+    dry_run: bool,
+    log_paths: list[Path],
+    run_command: Callable[..., subprocess.CompletedProcess[str]],
+    log_status: Callable[[list[Path], str, str], None],
+) -> tuple[Optional[float], Optional[float]]:
+    """Run a gas-phase GFN-xTB single point and return (kcal/mol, Hartree)."""
+    cmd_sp = [
+        xtb_executable,
+        str(xyz_path.name),
+        "--gfn",
+        str(gfn),
+        "--chrg",
+        str(charge),
+    ]
+    log_status(log_paths, "STEP", f"running GFN{gfn}-xTB gas-phase SP: {' '.join(shlex.quote(x) for x in cmd_sp)}")
+    cp_sp = run_command(cmd_sp, cwd=scratch_dir, dry_run=dry_run)
+    if not dry_run:
+        sp_log_path = scratch_dir / "xtbsp_run.log"
+        sp_log_path.write_text(cp_sp.stdout)
+        log_status(log_paths, "OK", f"saved GFN{gfn}-xTB SP stdout to {sp_log_path.name}")
+    if cp_sp.returncode != 0:
+        log_status(
+            log_paths,
+            "FAIL",
+            f"GFN{gfn}-xTB SP failed returncode={cp_sp.returncode} stdout_tail={cp_sp.stdout[-1000:]} stderr_tail={cp_sp.stderr[-1000:]}",
+        )
+        raise RuntimeError(
+            f"GFN{gfn}-xTB gas-phase SP calculation failed with code {cp_sp.returncode}.\n"
+            f"stdout:\n{cp_sp.stdout[-4000:]}\n"
+            f"stderr:\n{cp_sp.stderr[-4000:]}\n"
+        )
+
+    gas_sp_energy_h = parse_xtb_total_energy_hartree(cp_sp.stdout)
+    gas_sp_energy_kcal_mol = None
+    if gas_sp_energy_h is not None:
+        gas_sp_energy_kcal_mol = gas_sp_energy_h * HARTREE_TO_KCAL_MOL
+    else:
+        warnings.warn(
+            f"Could not parse TOTAL ENERGY from GFN{gfn}-xTB SP output. "
+            "Gas-phase energy will remain None.",
+            RuntimeWarning,
+        )
+        log_status(log_paths, "WARN", f"failed to parse gas-phase SP energy from GFN{gfn}-xTB SP output")
+
+    return gas_sp_energy_kcal_mol, gas_sp_energy_h
 
 
 def run_gxtb_single_point_energy(

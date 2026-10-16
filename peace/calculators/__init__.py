@@ -1,5 +1,16 @@
 from .aimnet2 import run_aimnet2_optimization, run_aimnet2_single_point_energy
 from .common import DEFAULT_TEMPERATURE_K, EV_TO_KCAL_MOL, HARTREE_TO_KCAL_MOL, float_regex, parse_last_float
+from .orca import (
+    orca_opt_keyword,
+    orca_solvent_keyword,
+    run_orca_frequencies,
+    run_orca_optimization,
+    run_orca_single_point_energy,
+    run_orca_solvation_single_point,
+    spin_multiplicity,
+    verify_orca_executable,
+)
+from .settings import CalculatorSettings, OrcaSettings
 from .xtb import (
     XtbFatalError,
     parse_xtb_rrho_contrib_hartree,
@@ -13,6 +24,7 @@ from .xtb import (
     run_hessian_and_parse_energies,
     run_xtb_command,
     run_xtb_optimization,
+    run_xtb_single_point_energy,
 )
 from .xtb2 import (
     run_gxtb_hessian_and_parse_energies as run_gxtb2_hessian_and_parse_energies,
@@ -24,8 +36,12 @@ __all__ = [
     "DEFAULT_TEMPERATURE_K",
     "HARTREE_TO_KCAL_MOL",
     "EV_TO_KCAL_MOL",
+    "CalculatorSettings",
+    "OrcaSettings",
     "XtbFatalError",
     "float_regex",
+    "orca_opt_keyword",
+    "orca_solvent_keyword",
     "parse_last_float",
     "parse_xtb_rrho_contrib_hartree",
     "parse_xtb_solvent_free_energy_hartree",
@@ -41,6 +57,13 @@ __all__ = [
     "run_gxtb_single_point_energy",
     "run_gxtb2_single_point_energy",
     "run_hessian_and_parse_energies",
+    "run_orca_frequencies",
+    "run_orca_optimization",
+    "run_orca_single_point_energy",
+    "run_orca_solvation_single_point",
     "run_xtb_command",
     "run_xtb_optimization",
+    "run_xtb_single_point_energy",
+    "spin_multiplicity",
+    "verify_orca_executable",
 ]

@@ -103,7 +103,7 @@ def _issue_marker(entry: ProtomerPlotEntry, *, species_has_thermo: bool) -> Opti
     if not species_has_thermo:
         return None
     markers = []
-    if entry.screening_skipped_postopt or entry.workflow_status == "post_xtb_screened_out":
+    if entry.screening_skipped_postopt or entry.workflow_status in ("screened_out", "post_xtb_screened_out"):
         markers.append("X")
     if entry.scf_convergence_retry:
         markers.append("*")

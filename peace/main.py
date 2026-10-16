@@ -4,6 +4,7 @@ from peace.common import canon_smiles, show_images, protonate_at_site, deprotona
 from peace import visualization
 from peace import __version__
 from peace.calculators.common import DEFAULT_TEMPERATURE_K
+from peace.calculators.settings import CalculatorSettings, OrcaSettings
 from peace.logging_utils import (
     LogLevel,
     clear_user_warnings,
@@ -47,7 +48,7 @@ def resolve_site_search_settings(
 def _build_cli_parser():
     import argparse
 
-    p = argparse.ArgumentParser(description="PEACE demo: tautomer/protomer enumeration + optional xTB solvation workflow.")
+    p = argparse.ArgumentParser(description="PEACE demo: tautomer/protomer enumeration + optional solvation free-energy workflow.")
     p.add_argument("--smiles", type=str, default="NCCCC(=O)CCC(=O)O", help="Input SMILES to enumerate.")
     p.add_argument(
         "--charge-min",
@@ -64,11 +65,14 @@ def _build_cli_parser():
     p.add_argument(
         "--solvation",
         action="store_true",
-        help="If set, runs a solvation energy workflow for all generated protomers (requires xTB + g-xTB binaries).",
+        help=(
+            "If set, runs a solvation free-energy workflow for all generated protomers "
+            "(requires the binaries for the selected calculators, e.g. xTB/g-xTB and/or ORCA)."
+        ),
     )
     p.add_argument("--dry-run", action="store_true", help="Do not run calculations.")
-    p.add_argument("--scratch-root", type=str, default="./solvation_results", help="Scratch root for xTB runs.")
-    p.add_argument("--keep-scratch", action="store_true", help="Keep xTB scratch directories after each protomer run.")
+    p.add_argument("--scratch-root", type=str, default="./solvation_results", help="Scratch root for calculator runs.")
+    p.add_argument("--keep-scratch", action="store_true", help="Keep calculator scratch directories after each protomer run.")
     p.add_argument(
         "--keep-logs",
         action="store_true",
@@ -140,43 +144,70 @@ def _build_cli_parser():
             "vtight",
             "extreme",
         ],
-        help="Optimization convergence preset for xTB/g-xTB runs.",
+        help=(
+            "Optimization convergence preset (xTB names). For ORCA these map to "
+            "LooseOpt (crude..lax), Opt (normal), TightOpt (tight), VeryTightOpt (vtight, extreme)."
+        ),
     )
-    p.add_argument(
-        "--optimization-engine",
-        type=str,
-        default="xtb",
-        choices=["xtb", "aimnet2"],
-        help="Geometry optimization engine for screening: 'xtb' or 'aimnet2' (ASE).",
+
+    calc = p.add_argument_group(
+        "calculators",
+        (
+            "Each stage of the free-energy workflow G = E_gas + G_RRHO + dG_solv can use its own "
+            "calculator. 'gas': gas-phase SP on embedded (screening) conformers and the "
+            "post-solvation gas-phase re-optimization + SP. 'freq': Hessian/RRHO. "
+            "'solv-opt': optimization in implicit solvent. 'solv-sp': implicit-solvation "
+            "free energy single point."
+        ),
     )
-    p.add_argument(
-        "--sp-energy",
+    calc.add_argument(
+        "--gas-calculator",
         type=str,
         default="gxtb",
-        choices=["gxtb", "xtb", "aimnet2"],
-        help="Gas-phase SP source: 'gxtb', 'xtb', or 'aimnet2'.",
+        choices=["gxtb", "gfn2", "aimnet2", "orca"],
+        help="Gas-phase SP and gas-phase re-optimization calculator (default: gxtb).",
     )
-    p.add_argument(
-        "--frequency-calculator",
+    calc.add_argument(
+        "--freq-calculator",
         type=str,
         default="gfn2",
-        choices=["gfn2", "gxtb"],
+        choices=["gfn2", "gxtb", "orca"],
+        help="Frequency (RRHO) calculator (default: gfn2).",
+    )
+    calc.add_argument(
+        "--solv-opt-calculator",
+        type=str,
+        default="gfn2",
+        choices=["gfn2", "aimnet2", "orca"],
         help=(
-            "Method for the Hessian/frequency (RRHO) calculation: 'gxtb' (g-xTB) or "
-            "'gfn2' (GFN2-xTB). Only changes the RRHO contribution."
-            " gxtb for frequencies is slower, but may provide slightly more accurate free energy results."
+            "Implicit-solvent optimization calculator: 'gfn2' (GFN2-xTB/ALPB, default), "
+            "'aimnet2' (gas-phase AIMNet2 via ASE), or 'orca' (ORCA with --solv-opt-orca-model)."
         ),
     )
-    p.add_argument(
+    calc.add_argument(
+        "--solv-sp-calculator",
+        type=str,
+        default="cpcmx",
+        choices=["cpcmx", "orca"],
+        help=(
+            "Implicit-solvation free energy calculator: 'cpcmx' (xTB CPCM-X, default) or "
+            "'orca' (ORCA with --solv-sp-orca-model)."
+        ),
+    )
+    calc.add_argument(
+        "--no-gas-optimize",
         "--no-gxtb-optimize",
+        dest="no_gas_optimize",
         action="store_true",
         help=(
-            "By default, each refined conformer is re-optimized in g-xTB gas phase before g-xTB SP "
-            "and frequency calculations. If set: g-xTB SP and frequencies use the "
-            "GFN2-xTB/ALPB optimized geometries."
+            "By default, each refined conformer is re-optimized in the gas phase with the "
+            "--gas-calculator before the gas-phase SP and frequency calculations. If set, the gas "
+            "SP and frequencies use the implicit-solvent optimized geometries instead."
         ),
     )
-    p.add_argument(
+
+    xtb_group = p.add_argument_group("xTB")
+    xtb_group.add_argument(
         "--xtb-version",
         type=str,
         default="default",
@@ -187,18 +218,112 @@ def _build_cli_parser():
             "Must match the binary passed to --xtb-executable."
         ),
     )
-    p.add_argument(
+    xtb_group.add_argument(
         "--xtb-executable",
         type=str,
         default="xtb",
-        help="xTB binary name or path (required with --solvation; must match --xtb-version).",
+        help=(
+            "xTB binary name or path (required with --solvation when any stage uses "
+            "gfn2/gxtb/cpcmx; must match --xtb-version)."
+        ),
     )
+
+    orca_group = p.add_argument_group(
+        "ORCA",
+        (
+            "Keywords are written verbatim to the ORCA '!' line. PEACE appends the job-type "
+            "keyword (Opt/FREQ) and the solvation model (e.g. CPCM(water)) for each stage."
+        ),
+    )
+    orca_group.add_argument(
+        "--orca-executable",
+        type=str,
+        default="orca",
+        help="ORCA binary name or path (resolved to a full path, as required for parallel ORCA).",
+    )
+    orca_group.add_argument(
+        "--orca-keywords",
+        type=str,
+        default=None,
+        help="Default ORCA method keywords for every ORCA stage, e.g. 'r2SCAN-3c' or 'wB97X-D4 def2-TZVP'.",
+    )
+    orca_group.add_argument(
+        "--gas-orca-keywords",
+        type=str,
+        default=None,
+        help="ORCA keywords for the gas stage (overrides --orca-keywords).",
+    )
+    orca_group.add_argument(
+        "--freq-orca-keywords",
+        type=str,
+        default=None,
+        help="ORCA keywords for the freq stage (overrides --orca-keywords).",
+    )
+    orca_group.add_argument(
+        "--solv-opt-orca-keywords",
+        type=str,
+        default=None,
+        help="ORCA keywords for the solv-opt stage (overrides --orca-keywords).",
+    )
+    orca_group.add_argument(
+        "--solv-sp-orca-keywords",
+        type=str,
+        default=None,
+        help=(
+            "ORCA keywords for the solv-sp stage (overrides --orca-keywords). With "
+            "--solv-sp-orca-model cosmors, only this flag is used (--orca-keywords is not "
+            "applied, since openCOSMO-RS fixes its own level of theory)."
+        ),
+    )
+    orca_group.add_argument(
+        "--solv-opt-orca-model",
+        type=str,
+        default="cpcm",
+        choices=["cpcm", "smd"],
+        help="ORCA implicit solvation model for the solv-opt stage (default: cpcm).",
+    )
+    orca_group.add_argument(
+        "--solv-sp-orca-model",
+        type=str,
+        default="cpcm",
+        choices=["cpcm", "smd", "cosmors"],
+        help=(
+            "ORCA solvation model for the solv-sp stage (default: cpcm). For cpcm/smd, "
+            "dG_solv = E(solvated SP) - E(gas SP) at the solv-sp keywords; for cosmors, "
+            "openCOSMO-RS dG_solv is read directly."
+        ),
+    )
+    orca_group.add_argument(
+        "--orca-solvent",
+        type=str,
+        default=None,
+        help="Solvent name passed to ORCA solvation models (default: the --solvent ALPB name).",
+    )
+    orca_group.add_argument(
+        "--orca-nprocs",
+        type=int,
+        default=1,
+        help="Number of processes per ORCA job (%%pal nprocs; requires a working MPI when > 1).",
+    )
+    orca_group.add_argument(
+        "--orca-maxcore",
+        type=int,
+        default=None,
+        help="Memory per ORCA process in MB (%%maxcore).",
+    )
+    orca_group.add_argument(
+        "--orca-extra-input",
+        type=str,
+        default=None,
+        help="Raw text appended to every ORCA input before the coordinates, e.g. '%%scf MaxIter 500 end'.",
+    )
+
     p.add_argument(
         "--temperature",
         type=float,
         default=DEFAULT_TEMPERATURE_K,
         help=(
-            "Temperature in Kelvin for RRHO thermochemistry (via `xtb thermo --temp`) "
+            "Temperature in Kelvin for RRHO thermochemistry "
             f"and Boltzmann weighting of conformers/protomers (default: {DEFAULT_TEMPERATURE_K:g})."
         ),
     )
@@ -207,7 +332,7 @@ def _build_cli_parser():
         type=str,
         default="water",
         help=(
-            "Solvent for GFN2-xTB/ALPB optimization and CPCM-X solvation. "
+            "Solvent for the implicit-solvent optimization and solvation free energy. "
             "Must be supported by data/allowed_solvents.txt (ALPB), "
             "data/cpcm_allowed_solvents.txt (CPCM-X aliases), and "
             "data/cpcm_internal_solvent_names.txt (xTB CPCM-X flag names)."
@@ -216,7 +341,7 @@ def _build_cli_parser():
     p.add_argument(
         "--recompute-solvation",
         action="store_true",
-        help="Recompute CPCM-X solvation in post-screen stage instead of reusing screening value.",
+        help="Recompute solvation in post-screen stage instead of reusing screening value.",
     )
     p.add_argument(
         "--recompute-frequencies",
@@ -227,7 +352,7 @@ def _build_cli_parser():
         "--screen-threshold",
         type=float,
         default=35.0,
-        help="Exclude protomers from conformer refinement if xTB screening delta exceeds energy threshold (kcal/mol).",
+        help="Exclude protomers from conformer refinement if the screening delta exceeds this threshold (kcal/mol).",
     )
     p.add_argument(
         "--max-conformers",
@@ -405,6 +530,31 @@ def _build_cli_parser():
     return p
 
 
+def _build_calculator_settings(args, *, orca_executable: Optional[str] = None) -> CalculatorSettings:
+    return CalculatorSettings(
+        gas=args.gas_calculator,
+        freq=args.freq_calculator,
+        solvent_opt=args.solv_opt_calculator,
+        solvation=args.solv_sp_calculator,
+        xtb_executable=args.xtb_executable,
+        xtb_version=args.xtb_version,
+        orca=OrcaSettings(
+            executable=orca_executable or args.orca_executable,
+            nprocs=int(args.orca_nprocs),
+            maxcore_mb=args.orca_maxcore,
+            extra_input=args.orca_extra_input,
+            solvent=args.orca_solvent,
+        ),
+        orca_keywords=args.orca_keywords,
+        gas_orca_keywords=args.gas_orca_keywords,
+        freq_orca_keywords=args.freq_orca_keywords,
+        solvent_opt_orca_keywords=args.solv_opt_orca_keywords,
+        solvent_opt_orca_model=args.solv_opt_orca_model,
+        solvation_orca_keywords=args.solv_sp_orca_keywords,
+        solvation_orca_model=args.solv_sp_orca_model,
+    )
+
+
 def _validate_cli_args(parser, args) -> None:
     if int(args.charge_min) > int(args.charge_max):
         parser.error("--charge-min must be <= --charge-max")
@@ -418,6 +568,10 @@ def _validate_cli_args(parser, args) -> None:
         parser.error("--pka cannot be combined with --plot-from-csv")
     if args.pka and not args.solvation:
         parser.error("--pka requires --solvation")
+    try:
+        _build_calculator_settings(args).validate()
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.pka and (int(args.charge_max) - int(args.charge_min) < 1):
         parser.error(
             "--pka requires a charge range with at least two neighboring charge states "
@@ -892,9 +1046,9 @@ def _assign_screening_placeholder(
         placeholder_energy,
     )
     _set_optional_double_prop(protomer, "solution_phase_free_energy_kcal_mol", placeholder_energy)
-    from peace.solvation import promote_screening_xtb_terms_to_final
+    from peace.solvation import promote_screening_terms_to_final
 
-    promote_screening_xtb_terms_to_final(protomer, clear_gas_sp=True)
+    promote_screening_terms_to_final(protomer, clear_gas_sp=True)
     return placeholder_energy
 
 
@@ -944,11 +1098,19 @@ if __name__ == "__main__":
     except ValueError as exc:
         parser.error(str(exc))
 
+    calculators = _build_calculator_settings(args)
     if args.solvation and not args.plot_from_csv:
+        from peace.calculators.orca import verify_orca_executable
         from peace.calculators.xtb import verify_xtb_executable
 
         try:
-            verify_xtb_executable(args.xtb_executable)
+            if calculators.uses_xtb:
+                verify_xtb_executable(args.xtb_executable)
+            if calculators.uses_orca:
+                calculators = _build_calculator_settings(
+                    args,
+                    orca_executable=verify_orca_executable(args.orca_executable),
+                )
         except ValueError as exc:
             parser.error(str(exc))
 
@@ -996,6 +1158,12 @@ if __name__ == "__main__":
     )
     log(f"Solvent: {solvent.alpb} (CPCM-X: {solvent.cpcm})")
     log(f"Temperature: {temperature_k:g} K")
+    if args.solvation:
+        log(f"Gas-phase calculator: {calculators.label('gas')}")
+        log(f"Frequency calculator: {calculators.label('freq')}")
+        log(f"Implicit-solvent optimization: {calculators.label('solvent_opt')}")
+        log(f"Implicit-solvation free energy: {calculators.label('solvation')}")
+        log(f"Gas-phase re-optimization: {'disabled' if args.no_gas_optimize else 'enabled'}")
     if args.only_protomer_search:
         log("Tautomer enumeration: disabled (--only-protomer-search)")
     if args.add_tautomers:
@@ -1187,11 +1355,7 @@ if __name__ == "__main__":
                     scratch_root=species_scratch / f"tautomer_{taut_idx}" / "screening",
                     conformer_mode="skip_search",
                     external_xyz_path=args.external_xyz,
-                    optimization_engine=args.optimization_engine,
-                    opt_level=args.opt_level,
-                    xtb_version=args.xtb_version,
-                    xtb_executable=args.xtb_executable,
-                    frequency_calculator=args.frequency_calculator,
+                    calculators=calculators,
                     solvent=solvent,
                     keep_scratch=bool(args.keep_scratch),
                     keep_logs=bool(args.keep_logs),
@@ -1252,14 +1416,10 @@ if __name__ == "__main__":
                     scratch_root=species_scratch / f"tautomer_{taut_idx}",
                     conformer_mode="skip_search",
                     external_xyz_path=args.external_xyz,
-                    optimization_engine=args.optimization_engine,
+                    calculators=calculators,
                     keep_scratch=bool(args.keep_scratch),
                     keep_logs=bool(args.keep_logs),
-                    sp_energy=args.sp_energy,
-                    gxtb_optimize=bool(not args.no_gxtb_optimize),
-                    frequency_calculator=args.frequency_calculator,
-                    xtb_version=args.xtb_version,
-                    xtb_executable=args.xtb_executable,
+                    gas_optimize=bool(not args.no_gas_optimize),
                     solvent=solvent,
                     dry_run=bool(args.dry_run),
                     opt_level=args.opt_level,
@@ -1319,7 +1479,7 @@ if __name__ == "__main__":
                     screen_delta=screen_delta,
                     baseline_energy=min_postopt_solution_energy,
                 )
-                protomer.mol.SetProp("workflow_status", "post_xtb_screened_out")
+                protomer.mol.SetProp("workflow_status", "screened_out")
                 log(
                     "Screened out protomer "
                     f"(tautomer {taut_idx + 1}, protomer {prot_idx + 1}) "
