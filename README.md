@@ -9,7 +9,7 @@
 ## Getting started
 1. Clone this repo and add this base directory to PATH, or run calculations directly from here.
 2. Install the project dependencies in `pyproject.toml` using `uv` or `pip`.
-3. If using free energy simulations, install `gxtb` version 2.0.1 or greater into `bin` (or specify its location with `--xtb-executable`). If running into issues, one can also install `gxtb` version 2.0.0, and separately install `xtb` and `cpcm` because the solvation model was not included in the 2.0.0 binary. (If this is done, set `--xtb-version` to `legacy`.) ORCA (6.x) is optional and only needed for stages that use the `orca` calculator.
+3. If using free energy simulations, install the appropriate QM software. If using `xtb`-based methods, install `gxtb` version 2.0.1 or greater into `bin` (or specify its location with `--xtb-executable`). If running into issues, one can also install `gxtb` version 2.0.0, and separately install `xtb` and `cpcm` because the solvation model was not included in the 2.0.0 binary. (If this is done, set `--xtb-version` to `legacy`.) ORCA (6.x) is optional and only needed for stages that use the `orca` calculator.
 
 Example setup with pip:
 ```
