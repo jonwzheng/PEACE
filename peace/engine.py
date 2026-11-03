@@ -119,7 +119,7 @@ class ChargeEngine:
         # Exclude also if it falls into an [aromatic - aromatic(OH/NH) - aromatic]
 
         atom_ids = []
-        for smarts in ["[CX3](=[OX1])O "]:
+        for smarts in ["[CX3](=[OX1])O"]:
             smarts_substructure = AllChem.MolFromSmarts(smarts)
             matches = ref_mol.GetSubstructMatches(smarts_substructure)
             for match in matches:
