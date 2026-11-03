@@ -1,6 +1,6 @@
 from .protomer import Tautomer, Species
-from rdkit.Chem import AllChem, Atom, ValenceType
-from rdkit.Chem.MolStandardize.rdMolStandardize import TautomerEnumerator
+from rdkit.Chem import AllChem, Atom
+from rdkit.Chem.MolStandardize.rdMolStandardize import CleanupParameters, TautomerEnumerator
 
 import warnings
 
@@ -15,7 +15,12 @@ class ChargeEngine:
     Calculations are performed in here to allow the SMARTS substructures to be cached.
     """
     def __init__(self):
-        self.tautomer_enumerator = TautomerEnumerator()
+        # By default RDKit strips sp3 stereo from every atom that could take part in a
+        # tautomeric shift, in all tautomers, which would make the stereo filter in
+        # search_for_tautomers_from_mol reject every tautomer of e.g. tetracyclines.
+        tautomer_params = CleanupParameters()
+        tautomer_params.tautomerRemoveSp3Stereo = False
+        self.tautomer_enumerator = TautomerEnumerator(tautomer_params)
         self.SMARTS_DICT = {
                 "strong_basic": 
                     {"groups": ["[#7+0]", "[#6-]"], "sites": [0, 0]}, # TODO: exclude NH acids.
@@ -132,10 +137,8 @@ class ChargeEngine:
         )
 
         def check_atom_for_equivalence(atom_1: Atom, atom_2: Atom) -> bool:
-            for m in ['GetFormalCharge', 'GetNumImplicitHs', 'GetAtomicNum', 'GetDegree','GetHybridization']:
+            for m in ['GetFormalCharge', 'GetTotalNumHs', 'GetAtomicNum', 'GetDegree','GetHybridization', 'GetTotalValence']:
                 if getattr(atom_1, m)() != getattr(atom_2, m)():
-                    return False
-                if getattr(atom_1, 'GetValence')(ValenceType.EXPLICIT) != getattr(atom_2, 'GetValence')(ValenceType.EXPLICIT):
                     return False
             for idx, bond_1 in enumerate(atom_1.GetBonds()):
                 bond_2 = atom_2.GetBonds()[idx]
@@ -147,10 +150,11 @@ class ChargeEngine:
 
         ref_mol_atoms = ref_mol.GetAtoms()
 
-        # exclude duplicate tautomers
-        for smiles in results.smiles:
+        # Atom indices are compared against ref_mol, so use the enumerator's mols
+        # (which keep the reference atom order) rather than re-parsed canonical SMILES.
+        for smiles, analyte_mol in zip(results.smiles, results.tautomers):
             tautomerized_atoms = []
-            analyte_mol = AllChem.MolFromSmiles(smiles)
+            analyte_mol = AllChem.Mol(analyte_mol)
             AllChem.AssignStereochemistry(analyte_mol, cleanIt=True, force=True)
             analyte_chiral_centers = dict(
                 AllChem.FindMolChiralCenters(
