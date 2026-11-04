@@ -26,6 +26,28 @@ Example run:
 CLI commands can be displayed e.g. with:
 `python -m peace.main --help`
 
+## Python API
+Everything available on the CLI can also be run from Python. Each CLI flag is a keyword argument with the leading dashes removed and dashes replaced by underscores (`--charge-min` -> `charge_min`, `--solv-sp-calculator` -> `solv_sp_calculator`); `peace.cli_defaults()` lists them all with their defaults. Unlike the CLI, the API does not write a CSV or display plots unless you pass `output_csv=...` or `no_plot=False`.
+
+```python
+import peace
+
+# Tautomer/protomer enumeration only (no QM)
+result = peace.enumerate_protomers("O=C(O)CN(CCN(CC(=O)O)CC(=O)O)CC(=O)O", charge_min=-4, charge_max=2)
+for charge, species in result.species_by_charge.items():
+    print(charge, sum(len(t.protomers) for t in species.tautomers.values()))
+
+# Solvation free energies and Boltzmann populations
+result = peace.solvate("NCC(=O)O", max_conformers=2, scratch_root="./solvation_results")
+print(result.dataframe[["protomer_smiles", "boltzmann_fraction"]])
+
+# Any CLI option combination, e.g. pKa
+result = peace.solvate("NCC(=O)O", charge_min=0, charge_max=1, pka=True)
+print(result.pka_dataframe)
+```
+
+`peace.run(smiles, **options)` is the general entry point; `enumerate_protomers` and `solvate` are thin wrappers that set `solvation`. All three return a `PeaceResult` with `species_by_charge` (the `Species` objects per formal charge), `dataframe` (the same table the CLI writes to CSV), and, with `pka=True`, `pka_result` and `pka_dataframe`. Invalid option combinations raise `ValueError` and unknown options raise `TypeError`.
+
 ## How it works:
 
 1. **Tautomer Enumeration** using RDKit.

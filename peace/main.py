@@ -15,12 +15,24 @@ from peace.logging_utils import (
     workflow_bracket_label,
 )
 from datetime import datetime
+from dataclasses import dataclass
 import time
 from pathlib import Path
 from typing import Any, Literal, Optional
 from rdkit.Chem import AllChem
 import copy
 import pandas as pd
+
+
+@dataclass
+class PeaceResult:
+    """Container for outputs of a PEACE enumeration, solvation, and pKa run."""
+
+    species_by_charge: dict[int, Species]
+    dataframe: pd.DataFrame
+    pka_result: Optional[Any] = None
+    pka_dataframe: Optional[pd.DataFrame] = None
+
 
 # Context-specific defaults when --site-search-mode is not set.
 SiteSearchContext = Literal["same_charge", "inter_charge", "cross_charge"]
@@ -1080,10 +1092,9 @@ def _header_banner() -> str:
                           @@%%%@@%##@%%%@@@              
     """
 
-if __name__ == "__main__":
+def run_from_args(parser, args, *, print_results: bool = True) -> PeaceResult:
+    """Run the full PEACE pipeline for parsed CLI arguments and return the results."""
     start_ts = time.time()
-    parser = _build_cli_parser()
-    args = parser.parse_args()
     clear_user_warnings()
     set_log_level(args.log_level)
     set_crash_on_warning(bool(args.crash_on_warning))
@@ -1141,7 +1152,7 @@ if __name__ == "__main__":
         end_ts = time.time()
         log(f"Run finished at: {_ts()}")
         log(f"Execution time: {end_ts - start_ts:.2f} s")
-        raise SystemExit(0)
+        return PeaceResult(species_by_charge={}, dataframe=df_plot)
     run_started_at = _ts()
     log(_header_banner())
     log(f"Version: {__version__}")
@@ -1544,9 +1555,11 @@ if __name__ == "__main__":
         df.to_csv(output_path, index=False)
         log(f"Saved dataframe CSV to: {output_path.resolve()}")
 
-    print(df)
+    if print_results:
+        print(df)
 
     pka_result = None
+    pka_df = None
     if args.pka:
         from peace.pka import (
             compute_pka_results,
@@ -1584,7 +1597,8 @@ if __name__ == "__main__":
         pka_df.to_csv(pka_csv_path, index=False)
         log(f"Saved pKa CSV to: {pka_csv_path.resolve()}")
         log(format_pka_report(pka_result))
-        print(pka_df)
+        if print_results:
+            print(pka_df)
 
     if not args.no_plot:
         for charge_state in requested_charges:
@@ -1644,3 +1658,23 @@ if __name__ == "__main__":
     log_user_warning_summary()
     log(f"Run finished at: {_ts()}")
     log(f"Execution time: {end_ts - start_ts:.2f} s")
+
+    return PeaceResult(
+        species_by_charge={charge: species_by_charge[charge] for charge in requested_charges},
+        dataframe=df,
+        pka_result=pka_result,
+        pka_dataframe=pka_df,
+    )
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    """Command-line entry point."""
+    parser = _build_cli_parser()
+    args = parser.parse_args(argv)
+    run_from_args(parser, args)
+    if args.plot_from_csv:
+        raise SystemExit(0)
+
+
+if __name__ == "__main__":
+    main()
