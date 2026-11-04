@@ -1,12 +1,27 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "peace"
-version = "0.1.0"
-description = "Protomer Enumeration And Charge Engine"
+name = "peace-protomer"
+dynamic = ["version"]
+description = "Protomer Enumerator & Automatic Calculator for Energies: an atomistic workflow for determining acid-base prototropic tautomer microstate populations"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jonathan Zheng", email = "jonathan.zheng@tuwien.ac.at" }]
 requires-python = ">=3.12,<3.15"
+keywords = ["cheminformatics", "tautomer", "protomer", "zwitterion", "pKa", "solvation", "rdkit", "xtb"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
 dependencies = [
     "rdkit",
     "pandas",
@@ -16,6 +31,27 @@ dependencies = [
     "matplotlib",
 ]
 
+[project.optional-dependencies]
+aimnet2 = ["aimnet", "ase"]
+test = ["pytest"]
+
+[project.scripts]
+peace = "peace.main:main"
+
+[project.urls]
+Homepage = "https://github.com/jonwzheng/PEACE"
+Repository = "https://github.com/jonwzheng/PEACE"
+Issues = "https://github.com/jonwzheng/PEACE/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "peace.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["peace*"]
+
+[tool.setuptools.package-data]
+peace = ["data/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

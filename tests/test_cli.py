@@ -413,6 +413,7 @@ def test_cli_plotting_and_plot_from_csv_execution(
 def test_cli_dry_run_solvation_and_pka_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    no_executable_checks,
 ):
     """Test --solvation --dry-run with --pka, --conformer-mode external_xyz, and related flags."""
     # Write a valid 3D glycine XYZ file for external_xyz mode

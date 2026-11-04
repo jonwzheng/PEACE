@@ -61,7 +61,7 @@ def test_cli_defaults_covers_all_cli_options():
     assert "solv_sp_calculator" in defaults
 
 
-def test_solvate_dry_run_with_pka(tmp_path: Path):
+def test_solvate_dry_run_with_pka(tmp_path: Path, no_executable_checks):
     result = peace.solvate(
         GLYCINE_SMILES,
         charge_min=0,

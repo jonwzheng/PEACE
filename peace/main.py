@@ -345,9 +345,9 @@ def _build_cli_parser():
         default="water",
         help=(
             "Solvent for the implicit-solvent optimization and solvation free energy. "
-            "Must be supported by data/allowed_solvents.txt (ALPB), "
-            "data/cpcm_allowed_solvents.txt (CPCM-X aliases), and "
-            "data/cpcm_internal_solvent_names.txt (xTB CPCM-X flag names)."
+            "Must be supported by peace/data/allowed_solvents.txt (ALPB), "
+            "peace/data/cpcm_allowed_solvents.txt (CPCM-X aliases), and "
+            "peace/data/cpcm_internal_solvent_names.txt (xTB CPCM-X flag names)."
         ),
     )
     p.add_argument(

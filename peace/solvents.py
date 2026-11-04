@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_PACKAGE_ROOT = Path(__file__).resolve().parent
 ALPB_SOLVENTS_FILE = _PACKAGE_ROOT / "data" / "allowed_solvents.txt"
 CPCM_SOLVENTS_FILE = _PACKAGE_ROOT / "data" / "cpcm_allowed_solvents.txt"
 CPCM_INTERNAL_SOLVENTS_FILE = _PACKAGE_ROOT / "data" / "cpcm_internal_solvent_names.txt"

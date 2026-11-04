@@ -1,30 +1,30 @@
 # PEACE: Protomer Enumerator & Automatic Calculator for Energies
 
-![PEACE Logo](docs/static/header.svg)
+![PEACE Logo](https://raw.githubusercontent.com/jonwzheng/PEACE/main/docs/static/header.svg)
 
 > [!WARNING]
 > This repository is actively being developed. Expect breaking changes and incomplete documentation.
 
 
 ## Getting started
-1. Clone this repo and add this base directory to PATH, or run calculations directly from here.
-2. Install the project dependencies in `pyproject.toml` using `uv` or `pip`.
-3. If using free energy simulations, install the appropriate QM software. If using `xtb`-based methods, install `gxtb` version 2.0.1 or greater into `bin` (or specify its location with `--xtb-executable`). If running into issues, one can also install `gxtb` version 2.0.0, and separately install `xtb` and `cpcm` because the solvation model was not included in the 2.0.0 binary. (If this is done, set `--xtb-version` to `legacy`.) ORCA (6.x) is optional and only needed for stages that use the `orca` calculator.
+1. Install from PyPI with `pip install peace-protomer` (the import name is `peace`). Add `peace-protomer[aimnet2]` to use the AIMNet2 calculators. Alternatively, clone this repo and install it in editable mode (see below).
+2. If using free energy simulations, install the appropriate QM software. If using `xtb`-based methods, install `gxtb` version 2.0.1 or greater into `bin` (or specify its location with `--xtb-executable`). If running into issues, one can also install `gxtb` version 2.0.0, and separately install `xtb` and `cpcm` because the solvation model was not included in the 2.0.0 binary. (If this is done, set `--xtb-version` to `legacy`.) ORCA (6.x) is optional and only needed for stages that use the `orca` calculator.
 
-Example setup with pip:
+Example development setup with pip:
 ```
 git clone git@github.com:jonwzheng/PEACE.git
 cd PEACE
 python -m venv peace_env
 source peace_env/bin/activate
-pip install -e .
+pip install -e ".[test]"
+pytest
 ```
 
 Example run:
-`python -m peace.main --smiles "NCC(=O)O" --solvation`
+`peace --smiles "NCC(=O)O" --solvation` (equivalently `python -m peace.main ...`)
 
 CLI commands can be displayed e.g. with:
-`python -m peace.main --help`
+`peace --help`
 
 ## Python API
 Everything available on the CLI can also be run from Python. Each CLI flag is a keyword argument with the leading dashes removed and dashes replaced by underscores (`--charge-min` -> `charge_min`, `--solv-sp-calculator` -> `solv_sp_calculator`); `peace.cli_defaults()` lists them all with their defaults. Unlike the CLI, the API does not write a CSV or display plots unless you pass `output_csv=...` or `no_plot=False`.
