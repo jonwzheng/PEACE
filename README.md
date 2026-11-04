@@ -2,15 +2,19 @@
 
 ![PEACE Logo](https://raw.githubusercontent.com/jonwzheng/PEACE/main/docs/static/header.svg)
 
-> [!WARNING]
-> This repository is actively being developed. Expect breaking changes and incomplete documentation.
+## Overview
+PEACE is a lightweight cheminformatics workflow for enumerating acid-base tautomers. It also includes a calculator function that orchestrates QM calculations for estimating the microstate populations in numerous solvent systems. 
 
+For more information, please read the manuscript (and cite, if using this work):
+> Zheng, J. W., & Heid, E. (2026). An Atomistic Workflow for Determining Acid-Base Prototropic Tautomer Microstate Populations. RSC Advances.
 
-## Getting started
+## Installation
 1. Install from PyPI with `pip install peace-protomer` (the import name is `peace`). Add `peace-protomer[aimnet2]` to use the AIMNet2 calculators. Alternatively, clone this repo and install it in editable mode (see below).
-2. If using free energy simulations, install the appropriate QM software. If using `xtb`-based methods, install `gxtb` version 2.0.1 or greater into `bin` (or specify its location with `--xtb-executable`). If running into issues, one can also install `gxtb` version 2.0.0, and separately install `xtb` and `cpcm` because the solvation model was not included in the 2.0.0 binary. (If this is done, set `--xtb-version` to `legacy`.) ORCA (6.x) is optional and only needed for stages that use the `orca` calculator.
+2. If using free energy simulations, install the appropriate QM software:
+  - If using `xtb`-based methods, install `gxtb` version 2.0.1 or greater into `bin` (or specify its location with `--xtb-executable`). 
+  - If using DFT, install ORCA 6.x and add this to `bin` (or specify its location with `--orca-executable`).
 
-Example development setup with pip:
+Alternatively, you can install from source:
 ```
 git clone git@github.com:jonwzheng/PEACE.git
 cd PEACE
@@ -27,7 +31,7 @@ CLI commands can be displayed e.g. with:
 `peace --help`
 
 ## Python API
-Everything available on the CLI can also be run from Python. Each CLI flag is a keyword argument with the leading dashes removed and dashes replaced by underscores (`--charge-min` -> `charge_min`, `--solv-sp-calculator` -> `solv_sp_calculator`); `peace.cli_defaults()` lists them all with their defaults. Unlike the CLI, the API does not write a CSV or display plots unless you pass `output_csv=...` or `no_plot=False`.
+Everything available on the CLI can also be run from Python e.g. (`--charge-min` -> `charge_min`, `--solv-sp-calculator` -> `solv_sp_calculator`). You can check their defaults with `peace.cli_defaults()`. By default, the Python API does not write a CSV or display plots unless you pass `output_csv=...` or `no_plot=False`.
 
 ```python
 import peace
@@ -45,8 +49,6 @@ print(result.dataframe[["protomer_smiles", "boltzmann_fraction"]])
 result = peace.solvate("NCC(=O)O", charge_min=0, charge_max=1, pka=True)
 print(result.pka_dataframe)
 ```
-
-`peace.run(smiles, **options)` is the general entry point; `enumerate_protomers` and `solvate` are thin wrappers that set `solvation`. All three return a `PeaceResult` with `species_by_charge` (the `Species` objects per formal charge), `dataframe` (the same table the CLI writes to CSV), and, with `pka=True`, `pka_result` and `pka_dataframe`. Invalid option combinations raise `ValueError` and unknown options raise `TypeError`.
 
 ## How it works:
 
@@ -70,7 +72,7 @@ Each stage of the free-energy workflow has its own calculator:
 
 `--freq-calculator gxtb` computes the RRHO contribution with g-xTB instead of GFN2-xTB frequencies; it may be slightly more accurate but is about 2x slower.
 
-ORCA stages take arbitrary method keywords: `--orca-keywords` sets a default for every ORCA stage, and `--gas-orca-keywords`, `--freq-orca-keywords`, `--solv-opt-orca-keywords`, `--solv-sp-orca-keywords` override it per stage. PEACE adds the job type (`Opt`/`FREQ`) and the solvation model itself: `--solv-opt-orca-model` (`cpcm`, `smd`) and `--solv-sp-orca-model` (`cpcm`, `smd`, `cosmors`). For CPCM/SMD, dG_solv = E(solvated SP) - E(gas SP); for `cosmors`, ORCA's openCOSMO-RS dG_solv is used directly. See `python -m peace.main --help` for runtime options (`--orca-executable`, `--orca-nprocs`, `--orca-maxcore`, `--orca-extra-input`, `--orca-solvent`).
+ORCA stages take arbitrary method keywords: `--orca-keywords` sets a default for every ORCA stage, and `--gas-orca-keywords`, `--freq-orca-keywords`, `--solv-opt-orca-keywords`, `--solv-sp-orca-keywords` override it per stage. PEACE adds the job type (`Opt`/`FREQ`) and the solvation model itself: `--solv-opt-orca-model` (`cpcm`, `smd`) and `--solv-sp-orca-model` (`cpcm`, `smd`, `cosmors`). See `python -m peace.main --help` for more runtime options.
 
 Example: r2SCAN-3c gas-phase energies and frequencies, keeping GFN2-xTB/ALPB optimization and CPCM-X solvation:
 ```
