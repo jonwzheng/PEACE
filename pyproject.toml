@@ -32,7 +32,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-aimnet2 = ["aimnet", "ase"]
 test = ["pytest"]
 
 [project.scripts]
@@ -55,3 +54,7 @@ peace = ["data/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "xtb: runs real xTB/g-xTB calculations (skipped when xtb is not on PATH)",
+    "aimnet2: runs AIMNet2 calculations (skipped when aimnet is not installed)",
+]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import runpy
-import shutil
 import sys
 from pathlib import Path
 
@@ -22,7 +21,7 @@ def _run_peace_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> None:
     runpy.run_path(str(Path(peace.main.__file__)), run_name="__main__")
 
 
-@pytest.mark.skipif(shutil.which("xtb") is None, reason="xtb binary not found on PATH")
+@pytest.mark.xtb
 def test_glycine_solvation_zwitterion_and_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

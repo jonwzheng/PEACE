@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
+from rdkit import Chem
 
 import peace
 from peace.main import PeaceResult
@@ -21,6 +21,24 @@ def test_enumerate_protomers_glycine_charge_range():
     neutral = result.dataframe[result.dataframe["formal_charge"] == 0]
     assert {"NCC(=O)O", "[NH3+]CC(=O)[O-]"} <= set(neutral["protomer_smiles"])
     assert result.pka_result is None
+
+
+EDTA_SMILES = "O=C(O)CN(CCN(CC(=O)O)CC(=O)O)CC(=O)O"
+
+
+def test_edta_charge_window_yields_valid_smiles():
+    charges = list(range(-4, 3))
+    result = peace.enumerate_protomers(EDTA_SMILES, charge_min=-4, charge_max=2)
+    assert sorted(result.species_by_charge) == charges
+    assert sorted(set(result.dataframe["formal_charge"])) == charges
+
+    for charge, species in result.species_by_charge.items():
+        smiles = [p.smiles for t in species.tautomers.values() for p in t.protomers.values()]
+        assert smiles, f"no protomers at charge {charge}"
+        for smi in smiles:
+            mol = Chem.MolFromSmiles(smi)
+            assert mol is not None, f"invalid SMILES at charge {charge}: {smi}"
+            assert Chem.GetFormalCharge(mol) == charge
 
 
 def test_run_matches_cli_options(tmp_path: Path):
@@ -78,7 +96,7 @@ def test_solvate_dry_run_with_pka(tmp_path: Path, no_executable_checks):
     assert result.pka_dataframe is not None
 
 
-@pytest.mark.skipif(shutil.which("xtb") is None, reason="xtb binary not found on PATH")
+@pytest.mark.xtb
 def test_solvate_glycine_zwitterion(tmp_path: Path):
     result = peace.solvate(
         GLYCINE_SMILES,

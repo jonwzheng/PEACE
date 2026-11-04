@@ -6,8 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  GXTB_RELEASE_URL: https://github.com/grimme-lab/g-xtb/releases/download/v2.0.1
+  GXTB_ARCHIVE: xtb-6.7.1-gxtb-140526-linux-x86_64.tar.xz
+
 jobs:
   test:
+    name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -24,11 +29,72 @@ jobs:
       - name: Install package
         run: python -m pip install -e ".[test]"
 
-      # xTB is not installed here, so tests that need real QM calculations are skipped.
       - name: Run tests
-        run: python -m pytest -v
+        run: python -m pytest -v -m "not xtb and not aimnet2"
+
+  qm:
+    name: Solvation workflow (g-xTB 2.0.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: python -m pip install -e ".[test]"
+
+      - name: Install g-xTB
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfL -O "$GXTB_RELEASE_URL/$GXTB_ARCHIVE" -O "$GXTB_RELEASE_URL/$GXTB_ARCHIVE.sha256"
+          sha256sum -c "$GXTB_ARCHIVE.sha256"
+          tar xJf "$GXTB_ARCHIVE"
+          echo "$RUNNER_TEMP/xtb-6.7.1/bin" >> "$GITHUB_PATH"
+
+      - name: Run solvation tests
+        env:
+          PEACE_REQUIRE_XTB: "1"
+        run: |
+          xtb --version | grep "xtb version"
+          python -m pytest -v -m "xtb and not aimnet2" --durations=10
+
+  aimnet2:
+    name: AIMNet2 calculators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # AIMNet2 is not a PEACE dependency; users install it manually, as done here.
+      - name: Install package and AIMNet2
+        run: |
+          python -m pip install -e ".[test]"
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install "aimnet[ase]"
+
+      - name: Install g-xTB
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfL -O "$GXTB_RELEASE_URL/$GXTB_ARCHIVE" -O "$GXTB_RELEASE_URL/$GXTB_ARCHIVE.sha256"
+          sha256sum -c "$GXTB_ARCHIVE.sha256"
+          tar xJf "$GXTB_ARCHIVE"
+          echo "$RUNNER_TEMP/xtb-6.7.1/bin" >> "$GITHUB_PATH"
+
+      - name: Run AIMNet2 tests
+        env:
+          PEACE_REQUIRE_XTB: "1"
+          PEACE_REQUIRE_AIMNET2: "1"
+        run: python -m pytest -v -m aimnet2
 
   build:
+    name: Build and check package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
