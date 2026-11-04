@@ -9,10 +9,11 @@ For more information, please read the manuscript (and cite, if using this work):
 > Zheng, J. W., & Heid, E. (2026). An Atomistic Workflow for Determining Acid-Base Prototropic Tautomer Microstate Populations. RSC Advances.
 
 ## Installation
-1. Install from PyPI with `pip install peace-protomer` (the import name is `peace`). Add `peace-protomer[aimnet2]` to use the AIMNet2 calculators. Alternatively, clone this repo and install it in editable mode (see below).
+1. Install from PyPI with `pip install peace-protomer` (the import name is `peace`). Add `peace-protomer[aimnet2]` if you plan to use the AIMNet2 calculators.
 2. If using free energy simulations, install the appropriate QM software:
   - If using `xtb`-based methods, install `gxtb` version 2.0.1 or greater into `bin` (or specify its location with `--xtb-executable`). 
   - If using DFT, install ORCA 6.x and add this to `bin` (or specify its location with `--orca-executable`).
+  - If using AIMNet2, install as mentioned above.
 
 Alternatively, you can install from source:
 ```
