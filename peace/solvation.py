@@ -15,6 +15,7 @@ import numpy as np
 
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDetermineBonds
+from rdkit.Geometry import Point3D
 
 from prism_pruner.pruner import prune
 
@@ -2685,6 +2686,63 @@ def run_protomer_screening(
     )
 
 
+def _load_precomputed_conformer_ensemble(
+    reference_smiles: str,
+    xyz_paths: list[str | Path],
+    *,
+    log_paths: Optional[list[Path]] = None,
+) -> tuple[Chem.Mol, list[int]]:
+    """Load an external conformer ensemble onto the SMILES atom order.
+
+    Each xyz file must contain one structure whose element sequence matches
+    ``AddHs(MolFromSmiles(reference_smiles))``. That is the atom order used by
+    CREST when the seed geometry is written from that same molecule. Files that
+    do not match are skipped. The returned conformer ids keep the input order,
+    which the caller should already have ranked (lowest energy first).
+    """
+    logs = log_paths or []
+    if not xyz_paths:
+        raise ValueError("precomputed_xyz_paths is empty.")
+    graph = Chem.MolFromSmiles(reference_smiles)
+    if graph is None:
+        raise ValueError(f"Could not parse SMILES for precomputed conformers: {reference_smiles}")
+    mol_h = Chem.AddHs(graph)
+    symbols = [atom.GetSymbol().lower() for atom in mol_h.GetAtoms()]
+    conf_ids: list[int] = []
+    for raw_path in xyz_paths:
+        path = Path(raw_path)
+        try:
+            atoms, coords = _prism_atoms_and_coords_from_xyz(path)
+        except (OSError, ValueError, IndexError) as exc:
+            _log_status(logs, "WARN", f"skipping precomputed conformer {path}: {exc}")
+            continue
+        got = [str(symbol).lower() for symbol in atoms]
+        if got != symbols:
+            _log_status(
+                logs,
+                "WARN",
+                (
+                    f"skipping precomputed conformer {path}: element order does not match "
+                    f"AddHs(MolFromSmiles({reference_smiles!r}))"
+                ),
+            )
+            continue
+        conformer = Chem.Conformer(mol_h.GetNumAtoms())
+        for atom_idx, xyz in enumerate(coords):
+            conformer.SetAtomPosition(
+                atom_idx,
+                Point3D(float(xyz[0]), float(xyz[1]), float(xyz[2])),
+            )
+        conf_ids.append(int(mol_h.AddConformer(conformer, assignId=True)))
+    if not conf_ids:
+        raise RuntimeError(
+            "No precomputed conformers matched the protomer atom order. "
+            f"SMILES={reference_smiles}"
+        )
+    _log_status(logs, "OK", f"loaded precomputed conformers n={len(conf_ids)}")
+    return mol_h, conf_ids
+
+
 def run_protomer_solvation(
     protomer: Protomer,
     *,
@@ -2693,6 +2751,7 @@ def run_protomer_solvation(
     calculators: CalculatorSettings | None = None,
     conformer_mode: ConformerMode = "skip_search",
     external_xyz_path: Optional[str | Path] = None,
+    precomputed_xyz_paths: Optional[list[str | Path]] = None,
     charge_override: Optional[int] = None,
     solvent: SolventNames | None = None,
     opt_level: str = "loose",
@@ -2722,6 +2781,11 @@ def run_protomer_solvation(
     (``freq``) on the gas-phase geometry. Optimized structures are pruned again
     (keeping the lowest-energy instance of each duplicate), and the surviving
     conformer solution-phase energies are Boltzmann-weighted.
+
+    ``precomputed_xyz_paths`` replaces that KDG/MMFF search. Each file is one
+    geometry whose atom order matches ``AddHs`` of the protomer SMILES (the
+    order CREST preserves when the seed is written from that molecule). The
+    semi-empirical workflow and the post-optimization PRISM prune are unchanged.
     """
     def _progress(message: str, *, level: LogLevel = LogLevel.VERBOSE) -> None:
         text = f"[{log_prefix}] {message}" if log_prefix else message
@@ -2786,61 +2850,84 @@ def run_protomer_solvation(
         if graph_mol is None:
             raise ValueError(f"Could not rebuild 3D graph from SMILES: {protomer.smiles}")
 
-        if embedded_conformers is not None and int(embedded_conformers) < int(max_qm_conformers):
-            raise ValueError(
-                f"embedded_conformers ({embedded_conformers}) must be greater than "
-                f"max_qm_conformers ({max_qm_conformers})."
+        used_precomputed = precomputed_xyz_paths is not None
+        if used_precomputed:
+            # Connectivity checks compare optimized xyz atom indices with AddHs
+            # of this SMILES graph. The precomputed files use that same order.
+            protomer.input_mol = Chem.Mol(graph_mol)
+            _progress("loading precomputed conformer ensemble")
+            mol_h, loaded_conf_ids = _load_precomputed_conformer_ensemble(
+                protomer.smiles,
+                list(precomputed_xyz_paths or []),
+                log_paths=log_paths,
+            )
+            if len(loaded_conf_ids) > int(max_qm_conformers):
+                _log_status(
+                    log_paths,
+                    "OK",
+                    (
+                        f"capping precomputed conformers from {len(loaded_conf_ids)} "
+                        f"to max_qm_conformers={int(max_qm_conformers)}"
+                    ),
+                )
+            selected_conf_ids = loaded_conf_ids[: int(max_qm_conformers)]
+            _set_mol_prop_str(protomer.mol, "conformer_mode", "precomputed_xyz")
+        else:
+            if embedded_conformers is not None and int(embedded_conformers) < int(max_qm_conformers):
+                raise ValueError(
+                    f"embedded_conformers ({embedded_conformers}) must be greater than "
+                    f"max_qm_conformers ({max_qm_conformers})."
+                )
+
+            _progress("generating KDG conformer ensemble")
+            mol_h, ranked_conf_ids = _generate_kdg_conformer_ensemble(
+                graph_mol,
+                random_seed=random_seed,
+                embedded_conformers=embedded_conformers,
+                log_paths=log_paths,
+            )
+            filtered_conf_ids = _filter_ranked_embedded_conformers(
+                mol_h,
+                ranked_conf_ids,
+                graph_mol,
+                energy_threshold_kcal_mol=conformer_energy_threshold_kcal_mol,
+            )
+            candidate_pool_conf_ids = _prune_redundant_conf_ids(
+                mol_h,
+                filtered_conf_ids,
+                log_paths=log_paths,
+            )
+            _log_status(
+                log_paths,
+                "OK",
+                f"embedded={len(ranked_conf_ids)} "
+                f"energy_connectivity_filter={len(filtered_conf_ids)} "
+                f"candidate_pool={len(candidate_pool_conf_ids)} "
+                f"max_qm={max_qm_conformers} "
+                f"energy_threshold={conformer_energy_threshold_kcal_mol:.2f} kcal/mol",
             )
 
-        _progress("generating KDG conformer ensemble")
-        mol_h, ranked_conf_ids = _generate_kdg_conformer_ensemble(
-            graph_mol,
-            random_seed=random_seed,
-            embedded_conformers=embedded_conformers,
-            log_paths=log_paths,
-        )
-        filtered_conf_ids = _filter_ranked_embedded_conformers(
-            mol_h,
-            ranked_conf_ids,
-            graph_mol,
-            energy_threshold_kcal_mol=conformer_energy_threshold_kcal_mol,
-        )
-        candidate_pool_conf_ids = _prune_redundant_conf_ids(
-            mol_h,
-            filtered_conf_ids,
-            log_paths=log_paths,
-        )
-        _log_status(
-            log_paths,
-            "OK",
-            f"embedded={len(ranked_conf_ids)} "
-            f"energy_connectivity_filter={len(filtered_conf_ids)} "
-            f"candidate_pool={len(candidate_pool_conf_ids)} "
-            f"max_qm={max_qm_conformers} "
-            f"energy_threshold={conformer_energy_threshold_kcal_mol:.2f} kcal/mol",
-        )
-
-        _progress("relaxing candidate conformer pool with MMFF94")
-        _optimize_mmff94_conformers(mol_h, candidate_pool_conf_ids, log_paths=log_paths)
-        ranked_relaxed_conf_ids = sorted(
-            candidate_pool_conf_ids,
-            key=lambda cid: _mmff94_conformer_energy_kcal_mol(mol_h, cid) or float("inf"),
-        )
-        n_before_mmff94_prune = len(ranked_relaxed_conf_ids)
-        deduplicated_relaxed_conf_ids = _prune_redundant_conf_ids(
-            mol_h,
-            ranked_relaxed_conf_ids,
-            log_paths=log_paths,
-        )
-        selected_conf_ids = deduplicated_relaxed_conf_ids[: int(max_qm_conformers)]
-        _log_status(
-            log_paths,
-            "OK",
-            f"MMFF94-relaxed {n_before_mmff94_prune} conformers; "
-            f"pre_qm_redundant_prune={n_before_mmff94_prune - len(deduplicated_relaxed_conf_ids)} "
-            f"relaxed_candidate_pool={len(deduplicated_relaxed_conf_ids)} "
-            f"selected_for_qm={len(selected_conf_ids)}",
-        )
+            _progress("relaxing candidate conformer pool with MMFF94")
+            _optimize_mmff94_conformers(mol_h, candidate_pool_conf_ids, log_paths=log_paths)
+            ranked_relaxed_conf_ids = sorted(
+                candidate_pool_conf_ids,
+                key=lambda cid: _mmff94_conformer_energy_kcal_mol(mol_h, cid) or float("inf"),
+            )
+            n_before_mmff94_prune = len(ranked_relaxed_conf_ids)
+            deduplicated_relaxed_conf_ids = _prune_redundant_conf_ids(
+                mol_h,
+                ranked_relaxed_conf_ids,
+                log_paths=log_paths,
+            )
+            selected_conf_ids = deduplicated_relaxed_conf_ids[: int(max_qm_conformers)]
+            _log_status(
+                log_paths,
+                "OK",
+                f"MMFF94-relaxed {n_before_mmff94_prune} conformers; "
+                f"pre_qm_redundant_prune={n_before_mmff94_prune - len(deduplicated_relaxed_conf_ids)} "
+                f"relaxed_candidate_pool={len(deduplicated_relaxed_conf_ids)} "
+                f"selected_for_qm={len(selected_conf_ids)}",
+            )
 
         pool_entries: list[ConformerPoolEntry] = []
         run_records: list[tuple[str, ConformerEnergyTerms]] = []
@@ -2945,6 +3032,8 @@ def run_protomer_solvation(
             temperature_k=temperature_k,
         )
         _set_mol_prop_str(protomer.mol, "workflow_status", "conformer_refined")
+        if used_precomputed and protomer.mol is not None:
+            _set_mol_prop_str(protomer.mol, "conformer_source", "precomputed_xyz")
         _set_mol_prop_str(protomer.mol, "calculator_settings", calculators.summary())
 
         if protomer.mol is not None and protomer.mol.HasProp("solution_phase_free_energy_kcal_mol"):
